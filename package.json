@@ -1,0 +1,38 @@
+{
+  "name": "vitalis",
+  "version": "0.1.0",
+  "bin": {
+    "vitalis": "bin/vitalis.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w",
+    "cdk": "cdk",
+    "deploy": "cdk deploy --all",
+    "destroy": "cdk destroy --all",
+    "diff": "cdk diff"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "aws-cdk": "^2.170.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.7.2",
+    "ts-node": "^10.9.2"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "^2.170.0",
+    "constructs": "^10.4.2",
+    "@aws-sdk/client-cognito-identity-provider": "^3.703.0",
+    "@aws-sdk/client-dynamodb": "^3.703.0",
+    "@aws-sdk/lib-dynamodb": "^3.703.0",
+    "@aws-sdk/client-s3": "^3.703.0",
+    "@aws-sdk/client-textract": "^3.703.0",
+    "@aws-sdk/client-sfn": "^3.703.0",
+    "@aws-sdk/client-eventbridge": "^3.703.0",
+    "@aws-sdk/client-lambda": "^3.703.0",
+    "@aws-sdk/client-sns": "^3.703.0",
+    "@aws-sdk/s3-request-presigner": "^3.703.0",
+    "uuid": "^11.0.3",
+    "source-map-support": "^0.5.21"
+  }
+}

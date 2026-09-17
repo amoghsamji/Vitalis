@@ -1,0 +1,32 @@
+# Dependencies
+node_modules/
+
+# CDK
+cdk.out/
+dist/
+.cdk.staging/
+
+# TypeScript build info
+*.tsbuildinfo
+
+# Next.js
+.next/
+out/
+
+# Environment files with real, deployment-specific values — never commit these.
+# .env.example (template with placeholder values) is intentionally NOT ignored.
+.env
+.env.local
+.env.production
+.env*.local
+
+# Logs
+*.log
+npm-debug.log*
+
+# Local tool/editor state
+.claude/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

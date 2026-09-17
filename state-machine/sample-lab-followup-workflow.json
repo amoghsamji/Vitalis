@@ -1,0 +1,49 @@
+{
+  "PK": "WORKFLOW#sample-lab-followup",
+  "SK": "DEFINITION",
+  "id": "sample-lab-followup",
+  "name": "Lab Result Follow-Up (Cholesterol)",
+  "enabled": true,
+  "triggerType": "lab_result_received",
+  "graph": {
+    "startNodeId": "cond-cholesterol",
+    "nodes": [
+      {
+        "id": "cond-cholesterol",
+        "kind": "condition",
+        "check": "value_greater_than",
+        "params": { "field": "Cholesterol", "threshold": 240 },
+        "onTrue": "action-sms",
+        "onFalse": "output-log-normal"
+      },
+      {
+        "id": "action-sms",
+        "kind": "action",
+        "action": "send_sms",
+        "params": { "message": "Hi, your recent labs need a follow-up. Please call the clinic or book online." },
+        "next": "action-schedule"
+      },
+      {
+        "id": "action-schedule",
+        "kind": "action",
+        "action": "schedule_appointment",
+        "params": {},
+        "next": "output-log-flagged"
+      },
+      {
+        "id": "output-log-flagged",
+        "kind": "output",
+        "output": "log_completion",
+        "params": { "note": "Abnormal cholesterol result, patient notified" },
+        "next": null
+      },
+      {
+        "id": "output-log-normal",
+        "kind": "output",
+        "output": "log_completion",
+        "params": { "note": "Cholesterol within normal range, no action needed" },
+        "next": null
+      }
+    ]
+  }
+}
