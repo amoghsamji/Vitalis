@@ -21,9 +21,9 @@ export default function PublicLayout({ children }: { children: React.ReactNode }
   }, [loading, session, router, pathname]);
 
   return (
-    <div className="flex min-h-screen flex-col bg-background text-foreground selection:bg-primary selection:text-primary-foreground">
+    <div className="flex min-h-screen flex-col bg-transparent text-foreground selection:bg-primary selection:text-primary-foreground">
       {/* Top Clinical Header */}
-      <header className="sticky top-0 z-40 border-b border-border bg-background">
+      <header className="sticky top-0 z-40 border-b border-border bg-background/90 backdrop-blur-[2px]">
         <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-3">
           <div className="flex items-center gap-6">
             <Link href="/" className="flex items-center gap-2.5">

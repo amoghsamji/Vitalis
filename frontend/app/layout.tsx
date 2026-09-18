@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 import { AuthProvider } from "@/lib/auth-context";
 import { Toaster } from "@/components/ui/shadcn/sonner";
+import { BackgroundWaveform } from "@/components/ui/BackgroundWaveform";
 
 export const metadata: Metadata = {
   title: "Vitalis | Clinical Operations & Workflow Platform",
@@ -16,8 +17,9 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <body>
+      <body className="relative">
         <AuthProvider>
+          <BackgroundWaveform />
           {children}
           <Toaster />
         </AuthProvider>

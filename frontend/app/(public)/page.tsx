@@ -112,7 +112,7 @@ export default function HomePage() {
       </div>
 
       {/* Editorial Chart Hero (Bounded Document with top & bottom 2px maroon rules) */}
-      <section className="relative border border-border border-t-2 border-t-primary border-b-2 border-b-primary bg-card rounded-[2px]">
+      <section className="relative border border-border border-t-2 border-t-primary border-b-2 border-b-primary bg-card/95 backdrop-blur-[1px] rounded-[2px]">
         {/* 4 Corner Registration Marks (Print crop mark brackets in maroon accent) */}
         <svg className="pointer-events-none absolute -top-2 -left-2 h-4 w-4 stroke-primary" fill="none" viewBox="0 0 16 16" aria-hidden="true">
           <path d="M16 1H1V16" strokeWidth="1" />
@@ -227,22 +227,49 @@ export default function HomePage() {
                     aria-hidden="true"
                   />
                   <svg viewBox="0 0 340 70" className="w-full h-16 stroke-primary fill-none relative z-10 overflow-visible">
+                    {/* Baseline trace */}
                     <path
                       d="M 0,35 L 35,35 L 45,35 Q 52,28 60,35 L 75,35 L 82,43 L 90,6 L 98,64 L 105,35 L 120,35 Q 130,22 140,35 L 170,35 L 180,35 Q 187,28 195,35 L 210,35 L 217,43 L 225,6 L 233,64 L 240,35 L 255,35 Q 265,22 275,35 L 340,35"
-                      strokeWidth="1.5"
+                      strokeWidth="1.2"
                       strokeLinecap="round"
                       strokeLinejoin="round"
-                      className="animate-ecg-draw"
+                      className="opacity-40"
                     />
-                    <circle r="2.5" className="fill-primary">
-                      <animateMotion
-                        path="M 0,35 L 35,35 L 45,35 Q 52,28 60,35 L 75,35 L 82,43 L 90,6 L 98,64 L 105,35 L 120,35 Q 130,22 140,35 L 170,35 L 180,35 Q 187,28 195,35 L 210,35 L 217,43 L 225,6 L 233,64 L 240,35 L 255,35 Q 265,22 275,35 L 340,35"
-                        dur="4s"
+                    {/* Active continuous sweep pulse */}
+                    <path
+                      d="M 0,35 L 35,35 L 45,35 Q 52,28 60,35 L 75,35 L 82,43 L 90,6 L 98,64 L 105,35 L 120,35 Q 130,22 140,35 L 170,35 L 180,35 Q 187,28 195,35 L 210,35 L 217,43 L 225,6 L 233,64 L 240,35 L 255,35 Q 265,22 275,35 L 340,35"
+                      strokeWidth="2.2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeDasharray="65 275"
+                    >
+                      <animate
+                        attributeName="stroke-dashoffset"
+                        from="340"
+                        to="0"
+                        dur="3.5s"
                         repeatCount="indefinite"
-                        begin="1.2s"
                       />
-                      <animate attributeName="opacity" values="0;1;1;0" dur="4s" repeatCount="indefinite" begin="1.2s" />
-                    </circle>
+                    </path>
+                    {/* Traveling Pulse Beacon with radar ping */}
+                    <g>
+                      <circle r="6" className="stroke-primary fill-none" strokeWidth="1">
+                        <animateMotion
+                          path="M 0,35 L 35,35 L 45,35 Q 52,28 60,35 L 75,35 L 82,43 L 90,6 L 98,64 L 105,35 L 120,35 Q 130,22 140,35 L 170,35 L 180,35 Q 187,28 195,35 L 210,35 L 217,43 L 225,6 L 233,64 L 240,35 L 255,35 Q 265,22 275,35 L 340,35"
+                          dur="3.5s"
+                          repeatCount="indefinite"
+                        />
+                        <animate attributeName="r" values="3;8;3" dur="0.8s" repeatCount="indefinite" />
+                        <animate attributeName="opacity" values="0.9;0.1;0.9" dur="0.8s" repeatCount="indefinite" />
+                      </circle>
+                      <circle r="3" className="fill-primary">
+                        <animateMotion
+                          path="M 0,35 L 35,35 L 45,35 Q 52,28 60,35 L 75,35 L 82,43 L 90,6 L 98,64 L 105,35 L 120,35 Q 130,22 140,35 L 170,35 L 180,35 Q 187,28 195,35 L 210,35 L 217,43 L 225,6 L 233,64 L 240,35 L 255,35 Q 265,22 275,35 L 340,35"
+                          dur="3.5s"
+                          repeatCount="indefinite"
+                        />
+                      </circle>
+                    </g>
                   </svg>
                 </div>
               </div>
