@@ -229,7 +229,7 @@ function WorkflowBuilder() {
         <Card>
           <h3 className="mb-3 text-sm font-semibold">Run history</h3>
           {runs.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No runs yet — this workflow hasn&apos;t fired.</p>
+            <p className="text-sm text-muted-foreground">No runs recorded: this workflow has not yet executed.</p>
           ) : (
             <div className="flex flex-col gap-3">
               {runs.map((run) => (

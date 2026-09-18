@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <rect width="32" height="32" rx="4" fill="#191512"/>
+  <!-- Clinical Cross in Oxblood Accent -->
+  <rect x="13.5" y="6" width="5" height="20" rx="1" fill="#7A2E2E"/>
+  <rect x="6" y="13.5" width="20" height="5" rx="1" fill="#7A2E2E"/>
+  <!-- Pulse Line Accent in Paper Tone -->
+  <path d="M7 16h5l2-4 3 8 2.5-5 1.5 1h4" fill="none" stroke="#F7F4EE" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

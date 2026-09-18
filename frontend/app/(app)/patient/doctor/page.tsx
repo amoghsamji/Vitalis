@@ -46,7 +46,7 @@ function DoctorDetail() {
   useEffect(() => {
     if (!id) return;
     if (mockDoctor) {
-      // Demo doctors aren't real backend records — nothing to fetch, and
+      // Demo doctors aren't real backend records: nothing to fetch, and
       // there's no real availability/booking for them (see the Book button
       // below, which is disabled with an explanation for these).
       setDoctor(mockDoctor);
@@ -112,7 +112,7 @@ function DoctorDetail() {
         {message && <p className="mb-3 text-sm text-emerald-600">{message}</p>}
         {error && <p className="mb-3 text-sm text-destructive">{error}</p>}
         {mockDoctor ? (
-          <EmptyState message="This is a demo profile for illustration only — it isn't a real provider and can't be booked. Real doctors who sign up will show real, bookable availability here." />
+          <EmptyState message="This is a demo profile for illustration only: it is not a real provider and cannot be booked. Real doctors who register will display real, bookable availability here." />
         ) : slots.length === 0 ? (
           <EmptyState message="No open slots right now." />
         ) : (

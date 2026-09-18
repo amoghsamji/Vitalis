@@ -1,29 +1,31 @@
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,500;0,8..60,600;0,8..60,700;1,8..60,400&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
-    --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
-    --popover: 0 0% 100%;
-    --popover-foreground: 222.2 84% 4.9%;
-    --primary: 243 75% 59%;
-    --primary-foreground: 210 40% 98%;
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 243 75% 59%;
-    --radius: 0.5rem;
+    --background: 40 36.4% 95.1%;   /* #F7F4EE paper */
+    --foreground: 25.7 16.3% 8.4%;  /* #191512 ink */
+    --card: 40 38% 97.5%;           /* crisp parchment */
+    --card-foreground: 25.7 16.3% 8.4%;
+    --popover: 40 38% 97.5%;
+    --popover-foreground: 25.7 16.3% 8.4%;
+    --primary: 0 45.2% 32.9%;       /* #7A2E2E oxblood/maroon accent */
+    --primary-foreground: 40 36.4% 95.1%; /* #F7F4EE paper */
+    --secondary: 40 22% 90%;
+    --secondary-foreground: 25.7 16.3% 8.4%;
+    --muted: 40 22% 90%;
+    --muted-foreground: 36 4.6% 42.7%; /* #726E68 muted text */
+    --accent: 0 45.2% 32.9%;        /* #7A2E2E oxblood */
+    --accent-foreground: 40 36.4% 95.1%;
+    --destructive: 0 45.2% 32.9%;   /* #7A2E2E oxblood */
+    --destructive-foreground: 40 36.4% 95.1%;
+    --border: 40 20% 83%;           /* #DDD8CC hairline ledger border */
+    --input: 40 20% 83%;
+    --ring: 0 45.2% 32.9%;          /* #7A2E2E oxblood focus ring */
+    --radius: 2px;
   }
 }
 
@@ -33,5 +35,127 @@
   }
   body {
     @apply bg-background text-foreground;
+    font-family: "Source Serif 4", Georgia, serif;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    background-image: radial-gradient(rgba(25, 21, 18, 0.035) 1px, transparent 1px);
+    background-size: 24px 24px;
+    background-attachment: fixed;
   }
 }
+
+/* Clinical Ledger Animations */
+@keyframes status-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+.animate-status-pulse {
+  animation: status-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes ecg-draw {
+  from {
+    stroke-dashoffset: 600;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+.animate-ecg-draw {
+  stroke-dasharray: 600;
+  stroke-dashoffset: 600;
+  animation: ecg-draw 1.2s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+}
+
+@keyframes redaction-slide {
+  0% {
+    transform: translateX(0%);
+  }
+  100% {
+    transform: translateX(101%);
+  }
+}
+
+.animate-redaction-bar {
+  animation: redaction-slide 400ms cubic-bezier(0.65, 0, 0.35, 1) 120ms forwards;
+}
+
+@keyframes fade-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-hero-eyebrow {
+  animation: fade-rise 400ms ease-out forwards;
+}
+
+.animate-hero-headline {
+  animation: fade-rise 400ms ease-out 80ms forwards;
+  opacity: 0;
+}
+
+.animate-hero-paragraph {
+  animation: fade-rise 400ms ease-out 160ms forwards;
+  opacity: 0;
+}
+
+.animate-hero-cta {
+  animation: fade-rise 400ms ease-out 240ms forwards;
+  opacity: 0;
+}
+
+.animate-hero-stats {
+  animation: fade-rise 400ms ease-out 320ms forwards;
+  opacity: 0;
+}
+
+/* Button Left-to-Right Hover Sweep */
+.btn-sweep {
+  position: relative;
+  overflow: hidden;
+  z-index: 1;
+}
+
+.btn-sweep::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-color: currentColor;
+  opacity: 0.08;
+  transform: translateX(-100%);
+  transition: transform 150ms ease-out;
+  z-index: -1;
+}
+
+.btn-sweep:hover::before {
+  transform: translateX(0);
+}
+
+.btn-sweep-primary {
+  position: relative;
+  overflow: hidden;
+  z-index: 1;
+}
+
+.btn-sweep-primary::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-color: rgba(247, 244, 238, 0.15);
+  transform: translateX(-100%);
+  transition: transform 150ms ease-out;
+  z-index: -1;
+}
+
+.btn-sweep-primary:hover::before {
+  transform: translateX(0);
+}
+

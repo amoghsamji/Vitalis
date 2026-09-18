@@ -6,7 +6,7 @@ interface LoadingStateProps {
   className?: string;
 }
 
-// No hooks — must be safe to use as a Suspense fallback
+// No hooks: must be safe to use as a Suspense fallback
 // (patient/doctor/page.tsx wraps its useSearchParams read in Suspense).
 export function LoadingState({ message = "Loading...", className }: LoadingStateProps) {
   return (

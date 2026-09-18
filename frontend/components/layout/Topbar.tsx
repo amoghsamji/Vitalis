@@ -21,18 +21,22 @@ export function Topbar() {
   if (!session) return null;
 
   return (
-    <header className="flex h-14 items-center justify-end border-b border-border bg-background px-6">
+    <header className="flex h-14 items-center justify-between border-b border-border bg-background px-6">
+      <div className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+        SESSION ACTIVE // SECURE ENCLAVE
+      </div>
       <DropdownMenu>
-        <DropdownMenuTrigger className="flex items-center gap-2 rounded-full outline-none focus-visible:ring-1 focus-visible:ring-ring">
-          <Avatar className="h-8 w-8">
-            <AvatarFallback>{initials(session.email)}</AvatarFallback>
+        <DropdownMenuTrigger className="flex items-center gap-2.5 rounded-[2px] border border-border bg-card px-2.5 py-1 outline-none transition-colors hover:bg-muted/50 focus-visible:ring-1 focus-visible:ring-foreground">
+          <Avatar className="h-6 w-6 rounded-[2px]">
+            <AvatarFallback className="rounded-[2px] font-mono text-[10px]">{initials(session.email)}</AvatarFallback>
           </Avatar>
+          <span className="font-mono text-xs text-foreground">{session.email}</span>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
-          <DropdownMenuLabel className="font-normal text-muted-foreground">{session.email}</DropdownMenuLabel>
+        <DropdownMenuContent align="end" className="rounded-[2px] border border-border bg-card shadow-none">
+          <DropdownMenuLabel className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">{session.email}</DropdownMenuLabel>
           <DropdownMenuSeparator />
-          <DropdownMenuItem onSelect={signOut} className="gap-2 text-destructive focus:text-destructive">
-            <LogOut className="h-4 w-4" />
+          <DropdownMenuItem onSelect={signOut} className="gap-2 font-mono text-xs text-destructive focus:text-destructive">
+            <LogOut className="h-3.5 w-3.5 stroke-[1.5]" />
             Sign out
           </DropdownMenuItem>
         </DropdownMenuContent>

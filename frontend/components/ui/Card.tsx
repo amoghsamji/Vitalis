@@ -5,10 +5,10 @@ export { CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from 
 
 export type CardPadding = "none" | "sm" | "md";
 
-const baseClasses = "rounded-lg border border-border bg-card text-card-foreground shadow-sm";
+const baseClasses = "rounded-[2px] border border-border bg-card text-card-foreground shadow-none";
 
 // Padding is a variant, not something callers override via a trailing
-// className string — Tailwind's generated stylesheet order (not className
+// className string: Tailwind's generated stylesheet order (not className
 // concatenation order) decides which same-specificity utility wins, so
 // cn(cardVariants(), "py-3") isn't guaranteed to beat a baked-in p-5.
 const paddingClasses: Record<CardPadding, string> = {

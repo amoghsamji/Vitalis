@@ -55,10 +55,24 @@ module.exports = {
           700: "#b45309",
         },
       },
+      fontFamily: {
+        serif: ['"Source Serif 4"', 'Lora', 'Georgia', 'serif'],
+        mono: ['"JetBrains Mono"', '"IBM Plex Mono"', 'ui-monospace', 'monospace'],
+        sans: ['"Source Serif 4"', 'Lora', 'Georgia', 'serif'],
+      },
+      boxShadow: {
+        none: 'none',
+        sm: 'none',
+        DEFAULT: 'none',
+        md: 'none',
+        lg: 'none',
+        xl: 'none',
+      },
       borderRadius: {
+        DEFAULT: "2px",
         lg: "var(--radius)",
-        md: "calc(var(--radius) - 2px)",
-        sm: "calc(var(--radius) - 4px)",
+        md: "calc(var(--radius) - 1px)",
+        sm: "calc(var(--radius) - 1px)",
       },
       keyframes: {
         "accordion-down": {

@@ -50,7 +50,7 @@ export default function WorkflowsPage() {
     <div className="flex flex-col gap-4">
       <PageHeader
         title="Workflows"
-        subtitle="Automate follow-ups — e.g. text a patient automatically when a lab result needs attention."
+        subtitle="Automate patient follow-ups (such as texting a patient automatically when a lab result needs attention)."
         actions={
           <Link href="/doctor/workflows/builder?id=new" className={buttonVariants({ variant: "primary" })}>
             <Plus className="h-4 w-4" /> New workflow
