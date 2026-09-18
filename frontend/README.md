@@ -37,6 +37,27 @@ npx cdk deploy VitalisFrontendStack
 
 The `SiteUrl` output is your CloudFront domain.
 
+## Google sign-in
+
+Create an OAuth web client in Google Cloud. Add the Cognito callback URL
+`https://vitalis-<account-id>-<region>.auth.<region>.amazoncognito.com/oauth2/idpresponse`
+to its authorised redirect URIs. Then deploy the backend with the Google
+credentials and the final frontend login URL:
+
+```bash
+npx cdk deploy VitalisStack \
+  -c oauthRedirectUrl=https://your-site.example.com/login \
+  -c googleClientId=... \
+  -c googleClientSecret=...
+```
+
+Set `NEXT_PUBLIC_COGNITO_DOMAIN` from the `CognitoDomain` stack output and
+`NEXT_PUBLIC_OAUTH_REDIRECT_URI` to that same `/login` URL before rebuilding
+the frontend. The single Sign in button opens Cognito Hosted UI, where users
+can sign in, sign up, or continue with Google. Google-created users start as
+patients; create doctors through the normal sign-up flow so they can select
+their role.
+
 ## Local development
 
 ```bash

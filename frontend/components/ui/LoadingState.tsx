@@ -10,7 +10,7 @@ interface LoadingStateProps {
 // (patient/doctor/page.tsx wraps its useSearchParams read in Suspense).
 export function LoadingState({ message = "Loading...", className }: LoadingStateProps) {
   return (
-    <div className={cn("flex items-center gap-2 py-8 text-sm text-slate-500", className)}>
+    <div className={cn("flex items-center gap-2 py-8 text-sm text-muted-foreground", className)}>
       <Loader2 className="h-4 w-4 animate-spin" />
       {message}
     </div>

@@ -6,9 +6,9 @@ export type BadgeVariant = "success" | "warning" | "danger" | "neutral" | "info"
 const variantClasses: Record<BadgeVariant, string> = {
   success: "bg-success-50 text-success-700",
   warning: "bg-warning-50 text-warning-700",
-  danger: "bg-danger-50 text-danger-700",
-  neutral: "bg-slate-100 text-slate-600",
-  info: "bg-brand-50 text-brand-700",
+  danger: "bg-destructive/10 text-destructive",
+  neutral: "bg-muted text-muted-foreground",
+  info: "bg-primary/10 text-primary",
 };
 
 interface BadgeProps extends HTMLAttributes<HTMLSpanElement> {

@@ -67,11 +67,52 @@ export class VitalisStack extends cdk.Stack {
       removalPolicy: RemovalPolicy.DESTROY, // dev-friendly; switch to RETAIN before real launch
     });
 
+    const oauthRedirectUrl = this.node.tryGetContext("oauthRedirectUrl") as string | undefined;
+    const googleClientId = this.node.tryGetContext("googleClientId") as string | undefined;
+    const googleClientSecret = this.node.tryGetContext("googleClientSecret") as string | undefined;
+    const googleEnabled = Boolean(oauthRedirectUrl && googleClientId && googleClientSecret);
+    if ([oauthRedirectUrl, googleClientId, googleClientSecret].some(Boolean) && !googleEnabled) {
+      throw new Error("Google sign-in needs oauthRedirectUrl, googleClientId, and googleClientSecret CDK context values.");
+    }
+
+    const cognitoDomainPrefix = `vitalis-${this.account}-${this.region}`;
+    userPool.addDomain("HostedUiDomain", { cognitoDomain: { domainPrefix: cognitoDomainPrefix } });
+
     const userPoolClient = new cognito.UserPoolClient(this, "VitalisUserPoolClient", {
       userPool,
       authFlows: { userPassword: true, userSrp: true },
       generateSecret: false,
+      supportedIdentityProviders: googleEnabled
+        ? [cognito.UserPoolClientIdentityProvider.COGNITO, cognito.UserPoolClientIdentityProvider.GOOGLE]
+        : [cognito.UserPoolClientIdentityProvider.COGNITO],
+      oAuth: googleEnabled
+        ? {
+            callbackUrls: [oauthRedirectUrl!],
+            logoutUrls: [oauthRedirectUrl!],
+            flows: { implicitCodeGrant: true },
+            scopes: [cognito.OAuthScope.OPENID, cognito.OAuthScope.EMAIL, cognito.OAuthScope.PROFILE],
+          }
+        : undefined,
     });
+
+    if (googleEnabled) {
+      const googleProvider = new cognito.CfnUserPoolIdentityProvider(this, "GoogleIdentityProvider", {
+        userPoolId: userPool.userPoolId,
+        providerName: "Google",
+        providerType: "Google",
+        providerDetails: {
+          client_id: googleClientId!,
+          client_secret: googleClientSecret!,
+          authorize_scopes: "openid email profile",
+        },
+        attributeMapping: {
+          email: "email",
+          given_name: "given_name",
+          family_name: "family_name",
+        },
+      });
+      userPoolClient.node.addDependency(googleProvider);
+    }
 
     new cognito.CfnUserPoolGroup(this, "DoctorsGroup", {
       userPoolId: userPool.userPoolId,
@@ -309,6 +350,9 @@ export class VitalisStack extends cdk.Stack {
     new cdk.CfnOutput(this, "ApiUrl", { value: httpApi.apiEndpoint });
     new cdk.CfnOutput(this, "UserPoolId", { value: userPool.userPoolId });
     new cdk.CfnOutput(this, "UserPoolClientId", { value: userPoolClient.userPoolClientId });
+    new cdk.CfnOutput(this, "CognitoDomain", {
+      value: `${cognitoDomainPrefix}.auth.${this.region}.amazoncognito.com`,
+    });
     new cdk.CfnOutput(this, "TableName", { value: table.tableName });
     new cdk.CfnOutput(this, "PdfBucketName", { value: pdfBucket.bucketName });
     new cdk.CfnOutput(this, "WorkflowBusName", { value: workflowBus.eventBusName });

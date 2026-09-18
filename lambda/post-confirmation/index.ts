@@ -28,7 +28,10 @@ const ROLE_TO_GROUP: Record<string, string> = {
  */
 export const handler = async (event: any) => {
   const attrs = event.request?.userAttributes ?? {};
-  const role = attrs["custom:role"];
+  // Google Hosted UI users do not submit our custom role attribute; treat them
+  // as patients so their first sign-in has the same usable permissions as a
+  // self-registered patient.
+  const role = attrs["custom:role"] || "patient";
   const groupName = role && ROLE_TO_GROUP[role];
 
   if (groupName) {

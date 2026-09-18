@@ -1,9 +1,11 @@
 import { type HTMLAttributes, forwardRef } from "react";
 import { cn } from "@/lib/utils";
 
+export { CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/shadcn/card";
+
 export type CardPadding = "none" | "sm" | "md";
 
-const baseClasses = "rounded-lg border border-slate-200 bg-white shadow-sm";
+const baseClasses = "rounded-lg border border-border bg-card text-card-foreground shadow-sm";
 
 // Padding is a variant, not something callers override via a trailing
 // className string — Tailwind's generated stylesheet order (not className

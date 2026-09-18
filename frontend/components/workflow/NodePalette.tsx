@@ -16,7 +16,7 @@ function PaletteButton({ label, onClick, badge }: { label: string; onClick: () =
     <button
       type="button"
       onClick={onClick}
-      className="flex w-full items-center justify-between rounded-md border border-slate-200 px-2.5 py-1.5 text-left text-xs hover:border-brand-400 hover:bg-brand-50"
+      className="flex w-full items-center justify-between rounded-md border border-border px-2.5 py-1.5 text-left text-xs transition-colors hover:border-primary/40 hover:bg-accent"
     >
       <span>{label}</span>
       {badge}
@@ -28,9 +28,9 @@ export function NodePalette({ hasTrigger, onAddTrigger, onAddCondition, onAddAct
   return (
     <Card padding="sm" className="flex w-64 shrink-0 flex-col gap-4 self-start">
       <div>
-        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Trigger</h3>
+        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Trigger</h3>
         {hasTrigger ? (
-          <p className="text-xs text-slate-400">Every workflow starts with one trigger — already on the canvas.</p>
+          <p className="text-xs text-muted-foreground/70">Every workflow starts with one trigger — already on the canvas.</p>
         ) : (
           <div className="flex flex-col gap-1.5">
             {(Object.keys(TRIGGER_LABELS) as TriggerType[]).map((t) => (
@@ -41,7 +41,7 @@ export function NodePalette({ hasTrigger, onAddTrigger, onAddCondition, onAddAct
       </div>
 
       <div>
-        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Condition</h3>
+        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Condition</h3>
         <div className="flex flex-col gap-1.5">
           {(Object.keys(CONDITION_LABELS) as ConditionCheck[]).map((c) => (
             <PaletteButton key={c} label={CONDITION_LABELS[c]} onClick={() => onAddCondition(c)} />
@@ -50,7 +50,7 @@ export function NodePalette({ hasTrigger, onAddTrigger, onAddCondition, onAddAct
       </div>
 
       <div>
-        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Action</h3>
+        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Action</h3>
         <div className="flex flex-col gap-1.5">
           {(Object.keys(ACTION_LABELS) as ActionType[]).map((a) => (
             <PaletteButton
@@ -68,7 +68,7 @@ export function NodePalette({ hasTrigger, onAddTrigger, onAddCondition, onAddAct
       </div>
 
       <div>
-        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Output</h3>
+        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Output</h3>
         <div className="flex flex-col gap-1.5">
           {(Object.keys(OUTPUT_LABELS) as OutputType[]).map((o) => (
             <PaletteButton key={o} label={OUTPUT_LABELS[o]} onClick={() => onAddOutput(o)} />

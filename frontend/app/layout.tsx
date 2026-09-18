@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { AuthProvider } from "@/lib/auth-context";
-import { NavBar } from "./nav-bar";
+import { Toaster } from "@/components/ui/shadcn/sonner";
 
 export const metadata: Metadata = {
   title: "Vitalis",
@@ -13,8 +13,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en">
       <body>
         <AuthProvider>
-          <NavBar />
-          <main className="mx-auto max-w-5xl px-4 py-8">{children}</main>
+          {children}
+          <Toaster />
         </AuthProvider>
       </body>
     </html>

@@ -10,10 +10,10 @@ interface StatCardProps {
 
 export function StatCard({ icon: Icon, label, value, className }: StatCardProps) {
   return (
-    <div className={cn("rounded-lg border border-slate-200 bg-white p-4 shadow-sm", className)}>
-      <Icon className="h-4 w-4 text-slate-400" />
-      <p className="mt-2 text-2xl font-bold text-slate-900">{value}</p>
-      <p className="text-xs text-slate-500">{label}</p>
+    <div className={cn("rounded-lg border border-border bg-card p-4 shadow-sm", className)}>
+      <Icon className="h-4 w-4 text-muted-foreground" />
+      <p className="mt-2 text-2xl font-bold tracking-tight text-foreground">{value}</p>
+      <p className="text-xs text-muted-foreground">{label}</p>
     </div>
   );
 }

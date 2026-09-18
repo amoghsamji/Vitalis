@@ -1,5 +1,8 @@
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
+import { Input } from "@/components/ui/shadcn/input";
+import { Textarea } from "@/components/ui/shadcn/textarea";
+import { Label } from "@/components/ui/shadcn/label";
 import { Trash2 } from "lucide-react";
 import type { FlowNode } from "@/lib/workflowGraph";
 import { FUNCTIONAL_ACTIONS } from "./labels";
@@ -13,7 +16,7 @@ interface PropertiesPanelProps {
 export function PropertiesPanel({ node, onChangeParams, onDelete }: PropertiesPanelProps) {
   if (!node) {
     return (
-      <Card padding="sm" className="w-72 shrink-0 self-start text-sm text-slate-400">
+      <Card padding="sm" className="w-72 shrink-0 self-start text-sm text-muted-foreground/70">
         Select a node to edit its settings.
       </Card>
     );
@@ -24,7 +27,7 @@ export function PropertiesPanel({ node, onChangeParams, onDelete }: PropertiesPa
   return (
     <Card padding="sm" className="flex w-72 shrink-0 flex-col gap-3 self-start">
       <div className="flex items-center justify-between">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Properties</h3>
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Properties</h3>
         {data.kind !== "trigger" && (
           <Button variant="ghost" size="sm" onClick={() => onDelete(node.id)} icon={<Trash2 className="h-3.5 w-3.5" />}>
             Delete
@@ -32,7 +35,7 @@ export function PropertiesPanel({ node, onChangeParams, onDelete }: PropertiesPa
         )}
       </div>
 
-      {data.kind === "trigger" && <p className="text-xs text-slate-500">Trigger type is fixed once the workflow is created.</p>}
+      {data.kind === "trigger" && <p className="text-xs text-muted-foreground">Trigger type is fixed once the workflow is created.</p>}
 
       {data.kind === "condition" && data.check === "value_greater_than" && (
         <>
@@ -58,7 +61,7 @@ export function PropertiesPanel({ node, onChangeParams, onDelete }: PropertiesPa
       )}
 
       {data.kind === "condition" && data.check === "always_true" && (
-        <p className="text-xs text-slate-500">No parameters — this branch is always taken.</p>
+        <p className="text-xs text-muted-foreground">No parameters — this branch is always taken.</p>
       )}
 
       {data.kind === "action" && data.action === "send_sms" && (
@@ -74,14 +77,14 @@ export function PropertiesPanel({ node, onChangeParams, onDelete }: PropertiesPa
             value={String(data.params.phoneNumber ?? "")}
             onChange={(v) => onChangeParams(node.id, { ...data.params, phoneNumber: v })}
           />
-          <p className="text-xs text-slate-400">
+          <p className="text-xs text-muted-foreground/70">
             Leave phone blank to use the patient&apos;s number from their profile automatically.
           </p>
         </>
       )}
 
       {data.kind === "action" && !FUNCTIONAL_ACTIONS.includes(data.action) && (
-        <p className="text-xs text-slate-500">
+        <p className="text-xs text-muted-foreground">
           This action is a logged-only stub for now — it records that this step ran but doesn&apos;t call an external
           service yet.
         </p>
@@ -111,12 +114,12 @@ function TextField({
   multiline?: boolean;
 }) {
   return (
-    <div>
-      <label className="label">{label}</label>
+    <div className="flex flex-col gap-1.5">
+      <Label>{label}</Label>
       {multiline ? (
-        <textarea className="input" rows={3} value={value} onChange={(e) => onChange(e.target.value)} />
+        <Textarea rows={3} value={value} onChange={(e) => onChange(e.target.value)} />
       ) : (
-        <input className="input" value={value} onChange={(e) => onChange(e.target.value)} />
+        <Input value={value} onChange={(e) => onChange(e.target.value)} />
       )}
     </div>
   );
