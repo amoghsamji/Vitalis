@@ -5,7 +5,9 @@ import { useSearchParams } from "next/navigation";
 import { api, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import type { Doctor, Slot } from "@/lib/types";
+import { MOCK_DOCTORS } from "@/lib/mock-doctors";
 import { Card, CardContent } from "@/components/ui/Card";
+import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { LoadingState } from "@/components/ui/LoadingState";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -39,8 +41,19 @@ function DoctorDetail() {
   const [bookingId, setBookingId] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
+  const mockDoctor = id ? MOCK_DOCTORS.find((d) => d.id === id) : undefined;
+
   useEffect(() => {
     if (!id) return;
+    if (mockDoctor) {
+      // Demo doctors aren't real backend records — nothing to fetch, and
+      // there's no real availability/booking for them (see the Book button
+      // below, which is disabled with an explanation for these).
+      setDoctor(mockDoctor);
+      setSlots([]);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     Promise.all([api.getDoctor(id), api.listAvailability(id)])
       .then(([doctor, { slots }]) => {
@@ -49,6 +62,7 @@ function DoctorDetail() {
       })
       .catch((err) => setError(err instanceof Error ? err.message : "Failed to load doctor"))
       .finally(() => setLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
   async function book(slot: Slot) {
@@ -82,7 +96,10 @@ function DoctorDetail() {
             <AvatarFallback>{initials(doctor.name)}</AvatarFallback>
           </Avatar>
           <div>
-            <h1 className="text-2xl font-semibold tracking-tight text-foreground">{doctor.name}</h1>
+            <div className="flex items-center gap-2">
+              <h1 className="text-2xl font-semibold tracking-tight text-foreground">{doctor.name}</h1>
+              {mockDoctor && <Badge variant="info">Demo doctor</Badge>}
+            </div>
             <p className="text-muted-foreground">{doctor.specialty}</p>
             <p className="mt-2 text-sm text-muted-foreground">{doctor.bio}</p>
             <p className="mt-2 text-xs text-muted-foreground/70">Languages: {doctor.languages.join(", ") || "-"}</p>
@@ -94,7 +111,9 @@ function DoctorDetail() {
         <h2 className="mb-3 text-lg font-semibold">Available slots</h2>
         {message && <p className="mb-3 text-sm text-emerald-600">{message}</p>}
         {error && <p className="mb-3 text-sm text-destructive">{error}</p>}
-        {slots.length === 0 ? (
+        {mockDoctor ? (
+          <EmptyState message="This is a demo profile for illustration only — it isn't a real provider and can't be booked. Real doctors who sign up will show real, bookable availability here." />
+        ) : slots.length === 0 ? (
           <EmptyState message="No open slots right now." />
         ) : (
           <div className="grid gap-2 sm:grid-cols-2">

@@ -23,5 +23,5 @@
     "resolveJsonModule": true,
     "outDir": "dist"
   },
-  "exclude": ["node_modules", "cdk.out", "dist", "frontend"]
+  "exclude": ["node_modules", "cdk.out", "dist", "frontend", "test"]
 }

@@ -83,6 +83,32 @@ export function PropertiesPanel({ node, onChangeParams, onDelete }: PropertiesPa
         </>
       )}
 
+      {data.kind === "action" && data.action === "call_patient" && (
+        <>
+          <TextField
+            label="Follow-up timing (days after appointment)"
+            value={String(data.params.followUpDelayDays ?? "3")}
+            onChange={(v) => onChangeParams(node.id, { ...data.params, followUpDelayDays: v })}
+          />
+          <div className="flex flex-col gap-1.5">
+            <Label>If the patient can't be reached / understood</Label>
+            <select
+              className="rounded-md border border-input bg-transparent px-2 py-1.5 text-sm"
+              value={String(data.params.fallbackBehavior ?? "notify_doctor")}
+              onChange={(e) => onChangeParams(node.id, { ...data.params, fallbackBehavior: e.target.value })}
+            >
+              <option value="notify_doctor">Repeat once, then notify doctor</option>
+              <option value="retry_next_day">Repeat once, then retry the call next day</option>
+            </select>
+          </div>
+          <p className="text-xs text-muted-foreground/70">
+            Calls an automated Amazon Connect + Lex voice bot that verifies the patient, asks how they&apos;re
+            feeling, and can offer to book a follow-up appointment. Only fires for patients who&apos;ve opted in
+            (see their profile). See lambda/lex-fulfillment/script.ts for the exact call script.
+          </p>
+        </>
+      )}
+
       {data.kind === "action" && !FUNCTIONAL_ACTIONS.includes(data.action) && (
         <p className="text-xs text-muted-foreground">
           This action is a logged-only stub for now — it records that this step ran but doesn&apos;t call an external

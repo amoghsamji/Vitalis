@@ -1,6 +1,6 @@
 import { SNSClient, PublishCommand } from "@aws-sdk/client-sns";
-import { PutCommand } from "@aws-sdk/lib-dynamodb";
-import { ddb, TABLE_NAME, jsonResponse } from "../_shared/ddb";
+import { PutCommand, QueryCommand } from "@aws-sdk/lib-dynamodb";
+import { ddb, TABLE_NAME, jsonResponse, getClaims } from "../_shared/ddb";
 import { randomUUID } from "crypto";
 
 const sns = new SNSClient({});
@@ -18,6 +18,28 @@ const sns = new SNSClient({});
  * number, so it's left as a clearly marked seam rather than built by default.
  */
 export const handler = async (event: any) => {
+  // API route: GET /doctors/{id}/notifications -> in-app notifications for a
+  // doctor (booking confirmations plus the follow-up-call escalations written
+  // by lambda/notify-doctor: persistent symptoms, follow-up requested,
+  // emergency symptoms, unreachable patient).
+  if (event?.requestContext?.http?.method === "GET" && event.pathParameters?.id) {
+    const claims = getClaims(event);
+    if (!claims) return jsonResponse(401, { message: "Unauthorized" });
+    const doctorId = event.pathParameters.id;
+    if (claims.sub !== doctorId) return jsonResponse(403, { message: "Forbidden" });
+
+    const result = await ddb.send(
+      new QueryCommand({
+        TableName: TABLE_NAME,
+        IndexName: "GSI1",
+        KeyConditionExpression: "GSI1PK = :pk",
+        ExpressionAttributeValues: { ":pk": `DOCTOR_NOTIFICATIONS#${doctorId}` },
+        ScanIndexForward: false,
+      })
+    );
+    return jsonResponse(200, { notifications: result.Items || [] });
+  }
+
   // Direct invoke path (no API Gateway envelope)
   if (event.type === "sms") {
     await sns.send(

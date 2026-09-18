@@ -31,6 +31,19 @@ export interface Patient {
   phone: string;
   email: string;
   updatedAt?: string;
+  consentTimestamp?: string | null;
+  consentVersion?: string | null;
+  followUpCallsEnabled?: boolean;
+}
+
+export interface Prescription {
+  id: string;
+  appointmentId: string;
+  patientId: string;
+  doctorId: string;
+  key: string;
+  uploadedAt: string;
+  followUpSummary: string | null;
 }
 
 export interface Condition {
@@ -127,6 +140,34 @@ export interface Workflow {
   graph: WorkflowGraph;
   createdAt?: string;
   updatedAt?: string;
+}
+
+// Mirrors lambda/_shared/callAudit.ts's CallEventName + FOLLOWUP_CALL# item shape.
+export type FollowUpCallStatus = "requested" | "initiated" | "in_progress" | "completed" | "failed" | "opted_out";
+
+export interface FollowUpCall {
+  id: string;
+  appointmentId: string;
+  status: FollowUpCallStatus | string;
+  createdAt: string;
+}
+
+export interface FollowUpCallEvent {
+  followUpCallId: string;
+  event: string;
+  detail: Record<string, unknown>;
+  timestamp: string;
+}
+
+export interface DoctorNotification {
+  id: string;
+  type: "persistent_symptoms" | "follow_up_requested" | "emergency_symptoms" | "patient_unreachable" | string;
+  doctorId: string;
+  appointmentId: string;
+  patientId: string;
+  message: string;
+  read: boolean;
+  createdAt: string;
 }
 
 export interface WorkflowRun {

@@ -21,9 +21,11 @@ export const ACTION_LABELS: Record<ActionType, string> = {
   assign_staff: "Assign staff",
 };
 
-// Only send_sms is actually implemented — lambda/workflow-engine/index.ts's
+// send_sms and call_patient are actually implemented — lambda/workflow-engine/index.ts's
 // executeAction logs everything else. Keep the UI honest about that.
-export const FUNCTIONAL_ACTIONS: ActionType[] = ["send_sms"];
+// call_patient triggers a real Amazon Connect + Lex V2 automated follow-up
+// call via lambda/outbound-call-initiator (see lib/vitalis-stack.ts).
+export const FUNCTIONAL_ACTIONS: ActionType[] = ["send_sms", "call_patient"];
 
 export const OUTPUT_LABELS: Record<OutputType, string> = {
   log_completion: "Log completion",

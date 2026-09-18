@@ -1,10 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { useAsyncData } from "@/lib/useAsyncData";
-import type { Appointment } from "@/lib/types";
+import type { Appointment, FollowUpCall } from "@/lib/types";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
@@ -81,6 +81,7 @@ export default function PatientAppointmentsPage() {
                   <TableCell className="text-muted-foreground">{appt.consultationType}</TableCell>
                   <TableCell>
                     <Badge variant={appt.status === "confirmed" ? "success" : "neutral"}>{appt.status}</Badge>
+                    {appt.status === "completed" && <FollowUpStatusBadge appointmentId={appt.id} />}
                   </TableCell>
                   <TableCell className="pr-5 text-right">
                     {appt.status === "confirmed" && (
@@ -113,5 +114,35 @@ export default function PatientAppointmentsPage() {
         </Card>
       )}
     </div>
+  );
+}
+
+// Status-only — never renders event details or transcripts, which the backend
+// deliberately withholds from the patient-facing GET /follow-up-calls response
+// (see lambda/follow-up-calls/index.ts).
+function FollowUpStatusBadge({ appointmentId }: { appointmentId: string }) {
+  const { session } = useAuth();
+  const [call, setCall] = useState<FollowUpCall | null>(null);
+
+  useEffect(() => {
+    if (!session) return;
+    api
+      .getFollowUpCall(appointmentId, session.idToken)
+      .then(({ call }) => setCall(call))
+      .catch(() => {});
+  }, [session, appointmentId]);
+
+  if (!call) return null;
+  const label =
+    call.status === "requested" || call.status === "initiated"
+      ? "Follow-up call planned"
+      : call.status === "opted_out" || call.status === "failed"
+        ? null
+        : "Follow-up call completed";
+  if (!label) return null;
+  return (
+    <Badge variant="info" className="ml-1.5">
+      {label}
+    </Badge>
   );
 }

@@ -161,12 +161,30 @@ async function executeAction(action: string, params: any, eventDetail: Record<st
       );
       return;
     }
-    case "call_patient":
-      // Seam for Amazon Connect / Pinpoint Voice / your existing ElevenLabs+Twilio
-      // integration. Left unimplemented by default to avoid provisioning a phone
-      // number (which has an ongoing cost) in a starter deploy.
-      console.log("call_patient action reached — wire in your voice provider here", params);
+    case "call_patient": {
+      // Real implementation: Amazon Connect + Lex V2 automated follow-up call
+      // (see lambda/outbound-call-initiator, lambda/lex-fulfillment, and
+      // lib/vitalis-stack.ts's Connect/Lex resources). node.params can carry
+      // followUpDelayDays / fallbackBehavior from the workflow builder, but
+      // this trigger already only fires "prescription_uploaded" events
+      // (followUpDueAt is computed by lambda/_shared/prescriptionEvent.ts),
+      // so we call immediately here — a real scheduler that waits until
+      // followUpDueAt would be a separate piece of infra (see README "Known
+      // gaps"), not built here per the "don't build a scheduler" guidance.
+      const { appointmentId, doctorId, patientId } = eventDetail;
+      if (!appointmentId || !doctorId || !patientId) {
+        console.log("call_patient skipped — event missing appointmentId/doctorId/patientId", eventDetail);
+        return;
+      }
+      await lambdaClient.send(
+        new InvokeCommand({
+          FunctionName: process.env.OUTBOUND_CALL_INITIATOR_FN_NAME,
+          InvocationType: "Event",
+          Payload: Buffer.from(JSON.stringify({ requestFollowUp: true, appointmentId, doctorId, patientId })),
+        })
+      );
       return;
+    }
     case "schedule_appointment":
       // Seam for Google Calendar API call (see a future googleCalendar Lambda/service).
       console.log("schedule_appointment action reached — wire in Google Calendar here", params);

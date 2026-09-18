@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Search } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Doctor } from "@/lib/types";
+import { MOCK_DOCTORS } from "@/lib/mock-doctors";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { cardVariants } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
@@ -25,6 +26,8 @@ function initials(name: string) {
     .toUpperCase();
 }
 
+const MOCK_DOCTOR_IDS = new Set(MOCK_DOCTORS.map((d) => d.id));
+
 export default function FindDoctorPage() {
   const [doctors, setDoctors] = useState<Doctor[]>([]);
   const [specialty, setSpecialty] = useState("");
@@ -35,8 +38,16 @@ export default function FindDoctorPage() {
     setLoading(true);
     setError(null);
     try {
-      const { doctors } = await api.listDoctors(filters?.specialty ? { specialty: filters.specialty } : undefined);
-      setDoctors(doctors);
+      const { doctors: realDoctors } = await api.listDoctors(
+        filters?.specialty ? { specialty: filters.specialty } : undefined
+      );
+      // Demo doctors are always shown alongside real ones (clearly labeled),
+      // not just as a fallback when the directory is empty, so the directory
+      // never looks emptier than it is while you're still onboarding real
+      // doctors.
+      const q = filters?.specialty?.toLowerCase();
+      const mockMatches = q ? MOCK_DOCTORS.filter((d) => d.specialty.toLowerCase().includes(q)) : MOCK_DOCTORS;
+      setDoctors([...realDoctors, ...mockMatches]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load doctors");
     } finally {
@@ -94,9 +105,12 @@ export default function FindDoctorPage() {
               <div className="flex-1">
                 <div className="flex items-center justify-between gap-2">
                   <h2 className="font-semibold">{doctor.name}</h2>
-                  <Badge variant={doctor.availabilityStatus === "available_now" ? "success" : "neutral"}>
-                    {doctor.availabilityStatus === "available_now" ? "Available now" : "Unavailable"}
-                  </Badge>
+                  <div className="flex items-center gap-1.5">
+                    {MOCK_DOCTOR_IDS.has(doctor.id) && <Badge variant="info">Demo doctor</Badge>}
+                    <Badge variant={doctor.availabilityStatus === "available_now" ? "success" : "neutral"}>
+                      {doctor.availabilityStatus === "available_now" ? "Available now" : "Unavailable"}
+                    </Badge>
+                  </div>
                 </div>
                 <p className="text-sm text-muted-foreground">{doctor.specialty}</p>
               </div>

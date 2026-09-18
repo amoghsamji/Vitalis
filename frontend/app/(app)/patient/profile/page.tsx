@@ -11,6 +11,7 @@ import { LoadingState } from "@/components/ui/LoadingState";
 import { Input } from "@/components/ui/shadcn/input";
 import { Label } from "@/components/ui/shadcn/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/shadcn/tabs";
+import { PHONE_E164_REGEX, computeFollowUpEnabled } from "@/lib/constants";
 
 const blankPatient = (id: string, email: string): Patient => ({
   id,
@@ -21,6 +22,9 @@ const blankPatient = (id: string, email: string): Patient => ({
   riskLevel: "unknown",
   phone: "",
   email,
+  followUpCallsEnabled: false,
+  consentTimestamp: null,
+  consentVersion: null,
 });
 
 export default function PatientProfilePage() {
@@ -32,6 +36,9 @@ export default function PatientProfilePage() {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [consentGiven, setConsentGiven] = useState(false);
+  const [enableFollowUp, setEnableFollowUp] = useState(false);
+  const [followUpError, setFollowUpError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!session) return;
@@ -39,6 +46,8 @@ export default function PatientProfilePage() {
       try {
         const p = await api.getPatient(session.sub, session.idToken);
         setPatient(p);
+        setEnableFollowUp(Boolean(p.followUpCallsEnabled));
+        setConsentGiven(Boolean(p.followUpCallsEnabled));
       } catch (err) {
         if (err instanceof ApiError && err.status === 404) {
           setPatient(blankPatient(session.sub, session.email));
@@ -62,9 +71,27 @@ export default function PatientProfilePage() {
     setSaving(true);
     setMessage(null);
     setError(null);
+    setFollowUpError(null);
+
+    if (enableFollowUp && !computeFollowUpEnabled(patient.phone, consentGiven)) {
+      setFollowUpError(
+        !PHONE_E164_REGEX.test(patient.phone)
+          ? "Enter a valid phone number in E.164 format before enabling follow-up calls."
+          : "You must agree to the consent checkbox to enable follow-up calls."
+      );
+      setSaving(false);
+      return;
+    }
+
     try {
-      const saved = await api.updatePatient(session.sub, patient, session.idToken);
+      const followUpCallsEnabled = computeFollowUpEnabled(patient.phone, consentGiven) && enableFollowUp;
+      const saved = await api.updatePatient(
+        session.sub,
+        { ...patient, followUpCallsEnabled, consentGiven } as Partial<Patient> & { consentGiven: boolean },
+        session.idToken
+      );
       setPatient(saved);
+      setEnableFollowUp(Boolean(saved.followUpCallsEnabled));
       setMessage("Profile saved.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Save failed");
@@ -98,7 +125,12 @@ export default function PatientProfilePage() {
                   value={patient.dob}
                   onChange={(v) => setPatient({ ...patient, dob: v })}
                 />
-                <Field label="Phone" value={patient.phone} onChange={(v) => setPatient({ ...patient, phone: v })} />
+                <div className="flex flex-col gap-1.5">
+                  <Field label="Phone" value={patient.phone} onChange={(v) => setPatient({ ...patient, phone: v })} />
+                  <p className="text-xs text-muted-foreground">
+                    Enter your mobile number with country code, without spaces or dashes. Example: +919876543210.
+                  </p>
+                </div>
                 <Field label="Email" value={patient.email} onChange={(v) => setPatient({ ...patient, email: v })} />
                 <Field
                   label="Insurance"
@@ -106,6 +138,72 @@ export default function PatientProfilePage() {
                   onChange={(v) => setPatient({ ...patient, insurance: v })}
                 />
                 <Field label="MRN" value={patient.mrn ?? ""} onChange={(v) => setPatient({ ...patient, mrn: v })} />
+
+                <div className="flex flex-col gap-2 sm:col-span-2 rounded-md border border-border p-3">
+                  <p className="text-xs text-muted-foreground">
+                    After a completed appointment where your doctor uploads a prescription, Vitalis can place an
+                    automated phone call a few days later to check how you&apos;re feeling. The call is placed by an
+                    automated system (Amazon Connect + a voice bot) — it identifies itself, confirms it&apos;s
+                    talking to you by first name, and never discusses your health information if it can&apos;t
+                    verify you. You can ask it to schedule a follow-up appointment, or say you&apos;re fine. You can
+                    turn this off at any time, and no more calls will be placed once you do.
+                  </p>
+                  <label className="flex items-start gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      className="mt-0.5"
+                      checked={consentGiven}
+                      onChange={(e) => setConsentGiven(e.target.checked)}
+                    />
+                    I agree to receive automated healthcare follow-up calls on this number.
+                  </label>
+                  <label className="flex items-start gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      className="mt-0.5"
+                      checked={enableFollowUp}
+                      disabled={!computeFollowUpEnabled(patient.phone, consentGiven)}
+                      onChange={(e) => setEnableFollowUp(e.target.checked)}
+                    />
+                    Enable automated follow-up calls
+                  </label>
+                  {followUpError && <span className="text-sm text-destructive">{followUpError}</span>}
+                  {patient.followUpCallsEnabled && (
+                    <Button
+                      type="button"
+                      variant="danger"
+                      size="sm"
+                      className="w-fit"
+                      disabled={saving}
+                      onClick={async () => {
+                        if (!session) return;
+                        setSaving(true);
+                        setMessage(null);
+                        setError(null);
+                        try {
+                          const saved = await api.updatePatient(
+                            session.sub,
+                            { ...patient, followUpCallsEnabled: false, consentGiven: false } as Partial<Patient> & {
+                              consentGiven: boolean;
+                            },
+                            session.idToken
+                          );
+                          setPatient(saved);
+                          setEnableFollowUp(false);
+                          setConsentGiven(false);
+                          setMessage("Automated follow-up calls stopped. No more calls will be placed.");
+                        } catch (err) {
+                          setError(err instanceof Error ? err.message : "Failed to stop calls");
+                        } finally {
+                          setSaving(false);
+                        }
+                      }}
+                    >
+                      Stop automated calls now
+                    </Button>
+                  )}
+                </div>
+
                 <div className="flex items-center gap-3 sm:col-span-2">
                   <Button type="submit" disabled={saving}>
                     {saving ? "Saving..." : "Save profile"}

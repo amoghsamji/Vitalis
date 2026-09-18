@@ -14,6 +14,8 @@ import * as targets from "aws-cdk-lib/aws-events-targets";
 import * as sns from "aws-cdk-lib/aws-sns";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as logs from "aws-cdk-lib/aws-logs";
+import * as connect from "aws-cdk-lib/aws-connect";
+import * as lex from "aws-cdk-lib/aws-lex";
 import { RemovalPolicy, Duration } from "aws-cdk-lib";
 import * as path from "path";
 
@@ -140,6 +142,13 @@ export class VitalisStack extends cdk.Stack {
     //   WORKFLOW#<id>            / DEFINITION              -> workflow graph JSON
     //   WORKFLOW#<id>            / RUN#<runId>             -> execution/audit log
     //   NOTIFICATION#<id>        / DETAILS
+    //   PRESCRIPTION#<id>        / DETAILS                 -> prescription record (GSI1PK
+    //                                                          APPT_PRESCRIPTION#<appointmentId> for
+    //                                                          appointment-scoped lookup)
+    //   APPT#<id>                / EVENT_MARKER#prescription_uploaded -> idempotency marker,
+    //                                                          written once via a conditional
+    //                                                          PutCommand so the "prescription_uploaded"
+    //                                                          workflow event fires exactly once
     // GSI1 (GSI1PK/GSI1SK) is used for reverse lookups, e.g. list all appointments
     // for a given patient, or all slots for a doctor within a date range.
     const table = new dynamodb.Table(this, "VitalisTable", {
@@ -221,6 +230,7 @@ export class VitalisStack extends cdk.Stack {
     const pdfIntakeFn = makeFn("PdfIntakeFn", "pdf-intake/index.ts");
     const uploadsFn = makeFn("UploadsFn", "uploads/index.ts");
     const workflowsFn = makeFn("WorkflowsFn", "workflows/index.ts");
+    const prescriptionsFn = makeFn("PrescriptionsFn", "prescriptions/index.ts");
 
     // Cognito post-confirmation trigger: self-signup users pick a role
     // (custom:role = "doctor" | "patient") but aren't added to the matching
@@ -229,11 +239,13 @@ export class VitalisStack extends cdk.Stack {
     const postConfirmationFn = makeFn("PostConfirmationFn", "post-confirmation/index.ts");
 
     // Grants
-    for (const fn of [doctorsFn, patientsFn, appointmentsFn, availabilityFn, workflowEngineFn, pdfIntakeFn, workflowsFn, postConfirmationFn]) {
+    for (const fn of [doctorsFn, patientsFn, appointmentsFn, availabilityFn, workflowEngineFn, pdfIntakeFn, workflowsFn, postConfirmationFn, prescriptionsFn]) {
       table.grantReadWriteData(fn);
     }
     pdfBucket.grantRead(pdfIntakeFn);
     pdfBucket.grantPut(uploadsFn);
+    pdfBucket.grantPut(prescriptionsFn);
+    workflowBus.grantPutEventsTo(prescriptionsFn);
     pdfIntakeFn.addToRolePolicy(
       new iam.PolicyStatement({
         actions: ["textract:AnalyzeDocument", "textract:DetectDocumentText"],
@@ -277,6 +289,298 @@ export class VitalisStack extends cdk.Stack {
       eventPattern: { source: ["vitalis.triggers"] },
       targets: [new targets.LambdaFunction(workflowEngineFn)],
     });
+
+    // ---------------------------------------------------------------------
+    // 5b. AUTOMATED FOLLOW-UP CALLS — Amazon Connect + Lex V2
+    // ---------------------------------------------------------------------
+    // New DynamoDB item shapes used only by this feature (same single table):
+    //   FOLLOWUP_CALL#<id>  / DETAILS          -> call record (status, ids, GSI1PK
+    //                                              APPT_FOLLOWUP#<appointmentId> for
+    //                                              one-active-call-per-appointment lookup)
+    //   FOLLOWUP_CALL#<id>  / EVENT#<ts>#<name> -> append-only audit trail (see
+    //                                              lambda/_shared/callAudit.ts for the
+    //                                              exact allowed event names)
+    //   NOTIFICATION#<id>   / DETAILS          -> reused for doctor in-app notifications,
+    //                                              with GSI1PK DOCTOR_NOTIFICATIONS#<doctorId>
+    //
+    // See README.md "Automated follow-up calls" for the full manual Connect/Lex
+    // console checklist this stack alone can't complete (claiming a phone number,
+    // building+publishing the Lex bot version, associating the bot with the
+    // Connect instance, and authoring the Lex "get customer input" block inside
+    // the contact flow — none of which CloudFormation's Connect/Lex L1s support
+    // end-to-end; see the comments below for exactly where each gap is).
+
+    const fetchPatientContextFn = makeFn("FetchPatientContextFn", "fetch-patient-context/index.ts");
+    const getNextSlotsFn = makeFn("GetNextSlotsFn", "get-next-slots/index.ts");
+    const reserveSlotFn = makeFn("ReserveSlotAndScheduleFn", "reserve-slot-and-schedule/index.ts");
+    const notifyDoctorFn = makeFn("NotifyDoctorFn", "notify-doctor/index.ts");
+    const outboundCallInitiatorFn = makeFn("OutboundCallInitiatorFn", "outbound-call-initiator/index.ts", {
+      // Filled in below once the Connect instance/contact flow exist.
+      CONNECT_INSTANCE_ID: "placeholder",
+      CONNECT_CONTACT_FLOW_ID: "placeholder",
+    });
+    const followUpCallsFn = makeFn("FollowUpCallsFn", "follow-up-calls/index.ts");
+    const lexFulfillmentFn = makeFn("LexFulfillmentFn", "lex-fulfillment/index.ts", {
+      NOTIFY_DOCTOR_FN_NAME: notifyDoctorFn.functionName,
+      GET_NEXT_SLOTS_FN_NAME: getNextSlotsFn.functionName,
+    });
+
+    for (const fn of [
+      fetchPatientContextFn,
+      getNextSlotsFn,
+      reserveSlotFn,
+      notifyDoctorFn,
+      outboundCallInitiatorFn,
+      followUpCallsFn,
+      lexFulfillmentFn,
+    ]) {
+      table.grantReadWriteData(fn);
+    }
+    notifyDoctorFn.grantInvoke(lexFulfillmentFn);
+    getNextSlotsFn.grantInvoke(lexFulfillmentFn);
+    reserveSlotFn.grantInvoke(lexFulfillmentFn);
+    outboundCallInitiatorFn.grantInvoke(workflowEngineFn);
+    workflowEngineFn.addEnvironment("OUTBOUND_CALL_INITIATOR_FN_NAME", outboundCallInitiatorFn.functionName);
+
+    // Connect needs explicit permission to invoke StartOutboundVoiceContact,
+    // and to invoke the Lambdas used as contact-flow "Invoke AWS Lambda"
+    // blocks (fetch-patient-context). Resource is "*" for the Connect action
+    // because the instance ARN isn't known until CfnInstance below exists in
+    // the same stack and — same cyclic-dependency shape as the Cognito
+    // post-confirmation trigger above — scoping it would create a dependency
+    // cycle; the action itself is narrow.
+    outboundCallInitiatorFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["connect:StartOutboundVoiceContact"],
+        resources: ["*"],
+      })
+    );
+
+    // ---------------------------------------------------------------------
+    // Amazon Connect + Lex V2 are gated behind a context flag because some
+    // AWS account types (e.g. AISPL — the India-billed AWS reseller entity)
+    // are blocked from creating Amazon Connect instances entirely, in every
+    // region, until the account's billing relationship is migrated to a
+    // standard AWS Inc. account (an AWS Support/billing action, not
+    // something CDK/CloudFormation can route around). Deploy with
+    // `-c enableConnectLex=true` once that's sorted out; until then this
+    // whole block (and the automated voice call feature end-to-end) is
+    // skipped, and outboundCallInitiatorFn keeps its placeholder env vars
+    // set above, so `POST /appointments/{id}/follow-up-call` and the
+    // workflow engine's `call_patient` action will fail cleanly (a caught
+    // Connect API error) rather than the stack failing to deploy.
+    // ---------------------------------------------------------------------
+    const enableConnectLex = this.node.tryGetContext("enableConnectLex") === true
+      || this.node.tryGetContext("enableConnectLex") === "true";
+
+    if (enableConnectLex) {
+    // ---------------------------------------------------------------------
+    // Amazon Connect instance — CloudFormation-supported (CfnInstance).
+    // IDENTITY_MANAGEMENT_TYPE=CONNECT_MANAGED needs no directory. Only the
+    // "contactflows" and "inbound/outbound calls" attributes are needed for
+    // this feature; the rest default off to avoid provisioning cost.
+    // ---------------------------------------------------------------------
+    const connectInstance = new connect.CfnInstance(this, "VitalisConnectInstance", {
+      identityManagementType: "CONNECT_MANAGED",
+      instanceAlias: `vitalis-${this.account}-${this.region}`,
+      attributes: {
+        inboundCalls: true,
+        outboundCalls: true,
+        contactflowLogs: true,
+      },
+    });
+
+    fetchPatientContextFn.addPermission("AllowConnectInvoke", {
+      principal: new iam.ServicePrincipal("connect.amazonaws.com"),
+      sourceArn: connectInstance.attrArn,
+    });
+
+    // ---------------------------------------------------------------------
+    // Lex V2 bot — CfnBot (module is aws-cdk-lib/aws-lex; despite the name,
+    // AWS::Lex::Bot IS the Lex V2 resource type — "aws-lexv2bot" does not
+    // exist as a separate CDK module in this aws-cdk-lib version, confirmed
+    // against the installed type defs before writing this). Five custom
+    // intents map to script steps C-G; FallbackIntent (step H) is Lex's
+    // built-in AMAZON.FallbackIntent, configured rather than declared, since
+    // Lex V2 auto-provisions it for every bot locale and CfnBot's `intents`
+    // array is for custom intents only.
+    // ---------------------------------------------------------------------
+    const lexRole = new iam.Role(this, "VitalisLexBotRole", {
+      assumedBy: new iam.ServicePrincipal("lexv2.amazonaws.com"),
+    });
+    lexRole.addToPolicy(
+      new iam.PolicyStatement({
+        actions: ["polly:SynthesizeSpeech"],
+        resources: ["*"],
+      })
+    );
+
+    const utterances = (...texts: string[]) => texts.map((utterance) => ({ utterance }));
+
+    const followUpBot = new lex.CfnBot(this, "VitalisFollowUpBot", {
+      name: "vitalis-follow-up-call-bot",
+      // NOTE: aws-cdk-lib's generated CfnBot maps `dataPrivacy` through the
+      // generic (untyped) objectToCloudFormation() helper rather than the
+      // camelCase->PascalCase DataPrivacyProperty mapper used elsewhere in
+      // this file, so the raw CloudFormation key (`ChildDirected`, not
+      // `childDirected`) must be used here or the deploy fails with
+      // "Required property [ChildDirected] not found".
+      dataPrivacy: { ChildDirected: false },
+      idleSessionTtlInSeconds: 300,
+      roleArn: lexRole.roleArn,
+      autoBuildBotLocales: true,
+      botLocales: [
+        {
+          localeId: "en_US",
+          nluConfidenceThreshold: 0.4,
+          intents: [
+            {
+              name: "PatientIsFine",
+              sampleUtterances: utterances("I'm fine", "I'm feeling better", "No problems", "All good", "Feeling great"),
+            },
+            {
+              name: "ProblemPersists",
+              sampleUtterances: utterances(
+                "It still hurts",
+                "The problem persists",
+                "I'm not feeling better",
+                "Still having symptoms",
+                "It hasn't gone away"
+              ),
+            },
+            {
+              name: "ScheduleFollowUp",
+              sampleUtterances: utterances("Yes please", "Yes schedule it", "That would help", "Book an appointment", "Yes"),
+            },
+            {
+              name: "DeclineFollowUp",
+              sampleUtterances: utterances("No thanks", "Not right now", "No", "I'll contact the clinic myself"),
+            },
+            {
+              name: "EmergencySymptoms",
+              sampleUtterances: utterances(
+                "I can't breathe",
+                "I have severe chest pain",
+                "This is an emergency",
+                "I think I need an ambulance",
+                "I'm bleeding a lot"
+              ),
+            },
+          ],
+        },
+      ],
+      // Used for console "Test bot" only. Production traffic uses the
+      // published BotAlias below, which is what the Connect contact flow
+      // should reference (see the manual step in README.md — associating
+      // that alias with the Connect instance is a connect:AssociateBot API
+      // call CloudFormation has no L1 resource for).
+      testBotAliasSettings: {
+        botAliasLocaleSettings: [
+          {
+            localeId: "en_US",
+            botAliasLocaleSetting: {
+              enabled: true,
+              codeHookSpecification: {
+                lambdaCodeHook: {
+                  lambdaArn: lexFulfillmentFn.functionArn,
+                  codeHookInterfaceVersion: "1.0",
+                },
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    lexFulfillmentFn.addPermission("AllowLexInvoke", {
+      principal: new iam.ServicePrincipal("lexv2.amazonaws.com"),
+      sourceArn: followUpBot.attrArn,
+    });
+
+    const followUpBotVersion = new lex.CfnBotVersion(this, "VitalisFollowUpBotVersion", {
+      botId: followUpBot.attrId,
+      botVersionLocaleSpecification: [
+        {
+          localeId: "en_US",
+          botVersionLocaleDetails: { sourceBotVersion: "DRAFT" },
+        },
+      ],
+    });
+
+    const followUpBotAlias = new lex.CfnBotAlias(this, "VitalisFollowUpBotAlias", {
+      botId: followUpBot.attrId,
+      botAliasName: "prod",
+      botVersion: followUpBotVersion.attrBotVersion,
+      botAliasLocaleSettings: [
+        {
+          localeId: "en_US",
+          botAliasLocaleSetting: {
+            enabled: true,
+            codeHookSpecification: {
+              lambdaCodeHook: {
+                lambdaArn: lexFulfillmentFn.functionArn,
+                codeHookInterfaceVersion: "1.0",
+              },
+            },
+          },
+        },
+      ],
+    });
+    lexFulfillmentFn.addPermission("AllowLexAliasInvoke", {
+      principal: new iam.ServicePrincipal("lexv2.amazonaws.com"),
+      sourceArn: followUpBotAlias.attrArn,
+    });
+
+    // ---------------------------------------------------------------------
+    // Contact flow — CfnContactFlow DOES support content-as-code (confirmed:
+    // the `content` prop is a plain string of Connect Flow Language JSON).
+    // What's below is a minimal, real flow: greet -> invoke
+    // fetch-patient-context for server-side context -> disconnect. It does
+    // NOT include the "Get customer input (Amazon Lex)" block that transfers
+    // the live conversation to followUpBotAlias — Connect Flow Language's
+    // Lex V2 block references the bot by an ARN that also needs the
+    // connect:AssociateBot association (not a CloudFormation-managed
+    // resource; see README manual step 4) to actually be selectable, and
+    // hand-authoring that block's JSON blind (vs. exporting it from the
+    // visual designer after the association exists) risks shipping a flow
+    // that LOOKS complete but silently fails at runtime — so it's called
+    // out as a manual console edit instead of guessed at here.
+    // ---------------------------------------------------------------------
+    const contactFlowContent = {
+      Version: "2019-10-30",
+      StartAction: "invoke-context",
+      Actions: [
+        {
+          Identifier: "invoke-context",
+          Type: "InvokeLambdaFunction",
+          Parameters: { LambdaFunctionARN: fetchPatientContextFn.functionArn },
+          Transitions: { NextAction: "disconnect", Errors: [{ NextAction: "disconnect", ErrorType: "NoMatchingError" }] },
+        },
+        {
+          Identifier: "disconnect",
+          Type: "DisconnectParticipant",
+          Parameters: {},
+          Transitions: {},
+        },
+      ],
+    };
+
+    const contactFlow = new connect.CfnContactFlow(this, "VitalisFollowUpContactFlow", {
+      instanceArn: connectInstance.attrArn,
+      name: "vitalis-follow-up-call",
+      type: "CONTACT_FLOW",
+      content: JSON.stringify(contactFlowContent),
+    });
+
+    outboundCallInitiatorFn.addEnvironment("CONNECT_INSTANCE_ID", connectInstance.attrId);
+    outboundCallInitiatorFn.addEnvironment("CONNECT_CONTACT_FLOW_ID", contactFlow.attrContactFlowArn);
+
+    new cdk.CfnOutput(this, "ConnectInstanceId", { value: connectInstance.attrId });
+    new cdk.CfnOutput(this, "ConnectInstanceArn", { value: connectInstance.attrArn });
+    new cdk.CfnOutput(this, "FollowUpContactFlowArn", { value: contactFlow.attrContactFlowArn });
+    new cdk.CfnOutput(this, "LexFollowUpBotId", { value: followUpBot.attrId });
+    new cdk.CfnOutput(this, "LexFollowUpBotAliasId", { value: followUpBotAlias.attrBotAliasId });
+    } // end if (enableConnectLex)
 
     // ---------------------------------------------------------------------
     // 6. API GATEWAY — HTTP API, Cognito-authorized
@@ -337,6 +641,18 @@ export class VitalisStack extends cdk.Stack {
 
     // Presigned S3 URL for browser-side lab PDF upload
     addRoute("/uploads/lab-pdf", [apigwv2.HttpMethod.POST], uploadsFn, true);
+
+    // Prescription upload (doctor-only presign/confirm) + read routes
+    addRoute("/prescriptions/presign", [apigwv2.HttpMethod.POST], prescriptionsFn, true);
+    addRoute("/prescriptions/confirm", [apigwv2.HttpMethod.POST], prescriptionsFn, true);
+    addRoute("/prescriptions", [apigwv2.HttpMethod.GET], prescriptionsFn, true);
+    addRoute("/prescriptions/{id}", [apigwv2.HttpMethod.GET], prescriptionsFn, true);
+
+    // Automated follow-up calls: doctor's manual "Start follow-up call" test
+    // button, and reading back call status/audit timeline.
+    addRoute("/appointments/{id}/follow-up-call", [apigwv2.HttpMethod.POST], outboundCallInitiatorFn, true);
+    addRoute("/follow-up-calls", [apigwv2.HttpMethod.GET], followUpCallsFn, true);
+    addRoute("/doctors/{id}/notifications", [apigwv2.HttpMethod.GET], notificationsFn, true);
 
     // Workflow automation CRUD (workflow-engine executes these; this is how doctors
     // create/edit them)

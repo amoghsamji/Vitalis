@@ -90,6 +90,21 @@ export const handler = async (event: any) => {
 
   if (method === "PUT") {
     const body = JSON.parse(event.body || "{}");
+
+    // Must match frontend/lib/constants.ts PHONE_E164_REGEX exactly — lambdas
+    // don't share files with the frontend, so this is duplicated here.
+    const PHONE_E164_REGEX = /^\+[1-9]\d{7,14}$/;
+    const CONSENT_VERSION = "1.0";
+
+    if (body.phone) {
+      if (!PHONE_E164_REGEX.test(body.phone)) {
+        return jsonResponse(400, { message: "Phone number must be in E.164 format, e.g. +919876543210" });
+      }
+    }
+
+    const phoneValid = Boolean(body.phone) && PHONE_E164_REGEX.test(body.phone);
+    const followUpCallsEnabled = Boolean(body.followUpCallsEnabled) && phoneValid && Boolean(body.consentGiven);
+
     const item = {
       PK: `PATIENT#${id}`,
       SK: "PROFILE",
@@ -103,6 +118,9 @@ export const handler = async (event: any) => {
       riskLevel: body.riskLevel ?? "unknown",
       phone: body.phone,
       email: body.email,
+      followUpCallsEnabled,
+      consentTimestamp: followUpCallsEnabled ? new Date().toISOString() : null,
+      consentVersion: followUpCallsEnabled ? CONSENT_VERSION : null,
       updatedAt: new Date().toISOString(),
     };
     await ddb.send(new PutCommand({ TableName: TABLE_NAME, Item: item }));

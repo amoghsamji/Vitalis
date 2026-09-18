@@ -2,6 +2,7 @@ import { PutCommand, GetCommand, UpdateCommand, QueryCommand } from "@aws-sdk/li
 import { ConditionalCheckFailedException } from "@aws-sdk/client-dynamodb";
 import { EventBridgeClient, PutEventsCommand } from "@aws-sdk/client-eventbridge";
 import { ddb, TABLE_NAME, jsonResponse, getClaims } from "../_shared/ddb";
+import { emitPrescriptionUploadedIfReady } from "../_shared/prescriptionEvent";
 import { randomUUID } from "crypto";
 
 const eventBridge = new EventBridgeClient({});
@@ -158,6 +159,26 @@ export const handler = async (event: any) => {
 
   if (method === "PUT" && apptId) {
     const body = JSON.parse(event.body || "{}");
+
+    // Parallel/additional path for marking an appointment completed. Kept
+    // separate from the reschedule branch below (which has a known no-op bug
+    // via if_not_exists — intentionally left untouched) so this real,
+    // unconditional update doesn't interact with that bug's semantics.
+    if (body.status === "completed") {
+      const result = await ddb.send(
+        new UpdateCommand({
+          TableName: TABLE_NAME,
+          Key: { PK: `APPT#${apptId}`, SK: "DETAILS" },
+          UpdateExpression: "SET #s = :completed, updatedAt = :now",
+          ExpressionAttributeNames: { "#s": "status" },
+          ExpressionAttributeValues: { ":completed": "completed", ":now": new Date().toISOString() },
+          ReturnValues: "ALL_NEW",
+        })
+      );
+      await emitPrescriptionUploadedIfReady(apptId);
+      return jsonResponse(200, result.Attributes);
+    }
+
     const result = await ddb.send(
       new UpdateCommand({
         TableName: TABLE_NAME,

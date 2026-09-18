@@ -1,4 +1,17 @@
-import type { Appointment, Condition, Doctor, Medication, Patient, Slot, Workflow, WorkflowRun } from "./types";
+import type {
+  Appointment,
+  Condition,
+  Doctor,
+  DoctorNotification,
+  FollowUpCall,
+  FollowUpCallEvent,
+  Medication,
+  Patient,
+  Prescription,
+  Slot,
+  Workflow,
+  WorkflowRun,
+} from "./types";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL as string;
 
@@ -79,6 +92,24 @@ export const api = {
     request<{ appointments: Appointment[] }>(`/patients/${patientId}/appointments`, { token }),
   listDoctorAppointments: (doctorId: string, token: string) =>
     request<{ appointments: Appointment[] }>(`/doctors/${doctorId}/appointments`, { token }),
+  markAppointmentCompleted: (id: string, token: string) =>
+    request<Appointment>(`/appointments/${id}`, { method: "PUT", body: { status: "completed" }, token }),
+
+  // Prescriptions
+  presignPrescription: (appointmentId: string, token: string) =>
+    request<{ uploadUrl: string; key: string }>(`/prescriptions/presign`, {
+      method: "POST",
+      body: { appointmentId },
+      token,
+    }),
+  confirmPrescription: (
+    body: { appointmentId: string; key: string; followUpSummary?: string },
+    token: string
+  ) => request<Prescription>(`/prescriptions/confirm`, { method: "POST", body, token }),
+  listPrescriptions: (params: { appointmentId: string }, token: string) =>
+    request<{ prescriptions: Prescription[] }>(`/prescriptions?appointmentId=${encodeURIComponent(params.appointmentId)}`, {
+      token,
+    }),
 
   // Uploads
   getUploadUrl: (fileName: string, contentType: string, token: string) =>
@@ -95,6 +126,21 @@ export const api = {
     });
     if (!res.ok) throw new ApiError(res.status, "Upload failed");
   },
+
+  // Automated follow-up calls (Amazon Connect + Lex V2 — see lib/vitalis-stack.ts
+  // "AUTOMATED FOLLOW-UP CALLS" section and README.md).
+  startFollowUpCall: (appointmentId: string, token: string) =>
+    request<{ followUpCallId?: string; message?: string; alreadyRequested?: boolean }>(
+      `/appointments/${appointmentId}/follow-up-call`,
+      { method: "POST", token }
+    ),
+  getFollowUpCall: (appointmentId: string, token: string) =>
+    request<{ call: FollowUpCall | null; events: FollowUpCallEvent[] }>(
+      `/follow-up-calls?appointmentId=${encodeURIComponent(appointmentId)}`,
+      { token }
+    ),
+  listDoctorNotifications: (doctorId: string, token: string) =>
+    request<{ notifications: DoctorNotification[] }>(`/doctors/${doctorId}/notifications`, { token }),
 
   // Workflows
   listWorkflows: (token: string) => request<{ workflows: Workflow[] }>(`/workflows`, { token }),
