@@ -213,6 +213,28 @@ export function signIn(email: string, password: string): Promise<Session> {
   });
 }
 
+/** Kicks off Cognito's account-recovery flow, sending a verification code to the user's email. */
+export function forgotPassword(email: string): Promise<void> {
+  const cognitoUser = new CognitoUser({ Username: email, Pool: userPool });
+  return new Promise((resolve, reject) => {
+    cognitoUser.forgotPassword({
+      onSuccess: () => resolve(),
+      onFailure: (err) => reject(err),
+    });
+  });
+}
+
+/** Completes account recovery: exchanges the emailed code plus a new password for a reset account. */
+export function confirmForgotPassword(email: string, code: string, newPassword: string): Promise<void> {
+  const cognitoUser = new CognitoUser({ Username: email, Pool: userPool });
+  return new Promise((resolve, reject) => {
+    cognitoUser.confirmPassword(code, newPassword, {
+      onSuccess: () => resolve(),
+      onFailure: (err) => reject(err),
+    });
+  });
+}
+
 export function signOut(): void {
   userPool.getCurrentUser()?.signOut();
   if (typeof window !== "undefined") window.localStorage.removeItem(hostedSessionKey);

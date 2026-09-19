@@ -14,6 +14,8 @@ interface AuthState {
   completeHostedSignIn: () => Session | null;
   signUp: (email: string, password: string, givenName: string, familyName: string, role: Role) => Promise<void>;
   confirmSignUp: (email: string, code: string) => Promise<void>;
+  forgotPassword: (email: string) => Promise<void>;
+  confirmForgotPassword: (email: string, code: string, newPassword: string) => Promise<void>;
   signOut: () => void;
 }
 
@@ -58,6 +60,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const confirmSignUp = useCallback((email: string, code: string) => cognito.confirmSignUp(email, code), []);
 
+  const forgotPassword = useCallback((email: string) => cognito.forgotPassword(email), []);
+
+  const confirmForgotPassword = useCallback(
+    (email: string, code: string, newPassword: string) => cognito.confirmForgotPassword(email, code, newPassword),
+    []
+  );
+
   const signOut = useCallback(() => {
     cognito.signOut();
     setSession(null);
@@ -66,7 +75,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const role = session ? roleFromGroups(session.groups) : null;
 
   return (
-    <AuthContext.Provider value={{ session, loading, role, signIn, startHostedSignIn, completeHostedSignIn, signUp, confirmSignUp, signOut }}>
+    <AuthContext.Provider
+      value={{
+        session,
+        loading,
+        role,
+        signIn,
+        startHostedSignIn,
+        completeHostedSignIn,
+        signUp,
+        confirmSignUp,
+        forgotPassword,
+        confirmForgotPassword,
+        signOut,
+      }}
+    >
       {children}
     </AuthContext.Provider>
   );
