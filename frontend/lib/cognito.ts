@@ -18,16 +18,50 @@ export interface Session {
   idToken: string;
   sub: string;
   email: string;
+  name?: string;
+  givenName?: string;
+  familyName?: string;
   groups: string[];
 }
 
-function sessionFromCognito(session: CognitoUserSession): Session {
+function getUserAttributesMap(cognitoUser: CognitoUser): Promise<Record<string, string>> {
+  return new Promise((resolve) => {
+    cognitoUser.getUserAttributes((err, attrs) => {
+      if (err || !attrs) {
+        resolve({});
+        return;
+      }
+      const map: Record<string, string> = {};
+      for (const attr of attrs) {
+        map[attr.getName()] = attr.getValue();
+      }
+      resolve(map);
+    });
+  });
+}
+
+function sessionFromCognito(session: CognitoUserSession, extraAttrs?: Record<string, string>): Session {
   const idToken = session.getIdToken();
   const payload = idToken.decodePayload() as Record<string, unknown>;
+  const email = String(payload["email"] ?? extraAttrs?.["email"] ?? "");
+
+  const givenName = String(payload["given_name"] ?? payload["givenName"] ?? extraAttrs?.["given_name"] ?? "");
+  const familyName = String(payload["family_name"] ?? payload["familyName"] ?? extraAttrs?.["family_name"] ?? "");
+  const tokenName = String(payload["name"] ?? extraAttrs?.["name"] ?? "");
+
+  let name = [givenName, familyName].filter(Boolean).join(" ") || tokenName;
+
+  if (!name && typeof window !== "undefined" && email) {
+    name = window.localStorage.getItem(`vitalis.user-name:${email.toLowerCase()}`) || "";
+  }
+
   return {
     idToken: idToken.getJwtToken(),
     sub: String(payload["sub"] ?? ""),
-    email: String(payload["email"] ?? ""),
+    email,
+    name: name || undefined,
+    givenName: givenName || undefined,
+    familyName: familyName || undefined,
     groups: (payload["cognito:groups"] as string[]) ?? [],
   };
 }
@@ -37,13 +71,18 @@ export function getCurrentSession(): Promise<Session | null> {
   const cognitoUser = userPool.getCurrentUser();
   if (!cognitoUser) return Promise.resolve(getHostedSession());
 
-  return new Promise((resolve, reject) => {
-    cognitoUser.getSession((err: Error | null, session: CognitoUserSession | null) => {
+  return new Promise((resolve) => {
+    cognitoUser.getSession(async (err: Error | null, session: CognitoUserSession | null) => {
       if (err || !session || !session.isValid()) {
         resolve(getHostedSession());
         return;
       }
-      resolve(sessionFromCognito(session));
+      const attrs = await getUserAttributesMap(cognitoUser);
+      const s = sessionFromCognito(session, attrs);
+      if (s.name && typeof window !== "undefined" && s.email) {
+        window.localStorage.setItem(`vitalis.user-name:${s.email.toLowerCase()}`, s.name);
+      }
+      resolve(s);
     });
   });
 }
@@ -71,10 +110,20 @@ function sessionFromIdToken(idToken: string): (Session & { expiresAt: number }) 
     const claims = JSON.parse(json) as Record<string, unknown>;
     const expiresAt = Number(claims.exp) * 1000;
     if (!expiresAt || expiresAt <= Date.now()) return null;
+    const email = String(claims.email ?? "");
+    const given = String(claims.given_name ?? claims.givenName ?? "");
+    const family = String(claims.family_name ?? claims.familyName ?? "");
+    let name = [given, family].filter(Boolean).join(" ") || String(claims.name ?? "");
+    if (!name && typeof window !== "undefined" && email) {
+      name = window.localStorage.getItem(`vitalis.user-name:${email.toLowerCase()}`) || "";
+    }
     return {
       idToken,
       sub: String(claims.sub ?? ""),
-      email: String(claims.email ?? ""),
+      email,
+      name: name || undefined,
+      givenName: given || undefined,
+      familyName: family || undefined,
       groups: (claims["cognito:groups"] as string[]) ?? [],
       expiresAt,
     };
@@ -122,6 +171,12 @@ export function signUp(
     new CognitoUserAttribute({ Name: "family_name", Value: familyName }),
     new CognitoUserAttribute({ Name: "custom:role", Value: role }),
   ];
+  if (typeof window !== "undefined") {
+    const fullName = [givenName, familyName].filter(Boolean).join(" ");
+    if (fullName) {
+      window.localStorage.setItem(`vitalis.user-name:${email.toLowerCase()}`, fullName);
+    }
+  }
   return new Promise((resolve, reject) => {
     userPool.signUp(email, password, attributes, [], (err) => {
       if (err) reject(err);
@@ -145,7 +200,14 @@ export function signIn(email: string, password: string): Promise<Session> {
   const authDetails = new AuthenticationDetails({ Username: email, Password: password });
   return new Promise((resolve, reject) => {
     cognitoUser.authenticateUser(authDetails, {
-      onSuccess: (session) => resolve(sessionFromCognito(session)),
+      onSuccess: async (session) => {
+        const attrs = await getUserAttributesMap(cognitoUser);
+        const s = sessionFromCognito(session, attrs);
+        if (s.name && typeof window !== "undefined" && s.email) {
+          window.localStorage.setItem(`vitalis.user-name:${s.email.toLowerCase()}`, s.name);
+        }
+        resolve(s);
+      },
       onFailure: (err) => reject(err),
     });
   });
@@ -155,3 +217,4 @@ export function signOut(): void {
   userPool.getCurrentUser()?.signOut();
   if (typeof window !== "undefined") window.localStorage.removeItem(hostedSessionKey);
 }
+

@@ -18,15 +18,15 @@ export function Stepper({ steps, currentIndex, className }: StepperProps) {
             <div className="flex items-center gap-2">
               <span
                 className={cn(
-                  "flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-medium",
+                  "flex h-5 w-5 shrink-0 items-center justify-center rounded-[2px] font-mono text-[10px] font-medium",
                   done && "bg-primary text-primary-foreground",
-                  active && "border-2 border-primary text-primary",
-                  !done && !active && "border border-border text-muted-foreground"
+                  active && "border border-primary bg-primary text-primary-foreground",
+                  !done && !active && "border border-border text-muted-foreground bg-card"
                 )}
               >
-                {done ? <Check className="h-3.5 w-3.5" /> : i + 1}
+                {done ? <Check className="h-3 w-3 stroke-[2.5]" /> : i + 1}
               </span>
-              <span className={cn("text-sm font-medium", active ? "text-foreground" : "text-muted-foreground")}>
+              <span className={cn("font-mono text-xs uppercase tracking-wider", active ? "font-semibold text-foreground" : "text-muted-foreground")}>
                 {step}
               </span>
             </div>

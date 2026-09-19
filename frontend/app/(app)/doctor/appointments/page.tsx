@@ -266,7 +266,7 @@ function FollowUpCallPanel({ appointmentId, patientId }: { appointmentId: string
                 .slice(0, 5)
                 .map((e, i) => (
                   <li key={i}>
-                    {e.event} &mdash; {new Date(e.timestamp).toLocaleString()}
+                    {e.event}: {new Date(e.timestamp).toLocaleString()}
                   </li>
                 ))}
             </ul>

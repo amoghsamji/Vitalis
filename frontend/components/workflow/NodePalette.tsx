@@ -30,7 +30,7 @@ export function NodePalette({ hasTrigger, onAddTrigger, onAddCondition, onAddAct
       <div>
         <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Trigger</h3>
         {hasTrigger ? (
-          <p className="text-xs text-muted-foreground/70">Every workflow starts with one trigger — already on the canvas.</p>
+          <p className="text-xs text-muted-foreground/70">Every workflow starts with one trigger (already on the canvas).</p>
         ) : (
           <div className="flex flex-col gap-1.5">
             {(Object.keys(TRIGGER_LABELS) as TriggerType[]).map((t) => (

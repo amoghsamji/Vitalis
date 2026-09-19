@@ -143,7 +143,7 @@ export default function PatientProfilePage() {
                   <p className="text-xs text-muted-foreground">
                     After a completed appointment where your doctor uploads a prescription, Vitalis can place an
                     automated phone call a few days later to check how you&apos;re feeling. The call is placed by an
-                    automated system (Amazon Connect + a voice bot) — it identifies itself, confirms it&apos;s
+                    automated system (Amazon Connect + a voice bot): it identifies itself, confirms it&apos;s
                     talking to you by first name, and never discusses your health information if it can&apos;t
                     verify you. You can ask it to schedule a follow-up appointment, or say you&apos;re fine. You can
                     turn this off at any time, and no more calls will be placed once you do.
@@ -277,7 +277,7 @@ function ConditionsSection({ conditions, onAdd }: { conditions: Condition[]; onA
         {conditions.map((c) => (
           <div key={c.id} className="flex justify-between text-sm">
             <span>
-              {c.icd10Code} &mdash; {c.description}
+              {c.icd10Code}: {c.description}
             </span>
           </div>
         ))}
@@ -326,7 +326,7 @@ function MedicationsSection({ medications, onAdd }: { medications: Medication[];
         {medications.map((m) => (
           <div key={m.id} className="flex justify-between text-sm">
             <span>
-              {m.name} &mdash; {m.dosage} {m.frequency}
+              {m.name} ({m.dosage} {m.frequency})
             </span>
           </div>
         ))}

@@ -117,7 +117,7 @@ export default function PatientAppointmentsPage() {
   );
 }
 
-// Status-only — never renders event details or transcripts, which the backend
+// Status-only: never renders event details or transcripts, which the backend
 // deliberately withholds from the patient-facing GET /follow-up-calls response
 // (see lambda/follow-up-calls/index.ts).
 function FollowUpStatusBadge({ appointmentId }: { appointmentId: string }) {

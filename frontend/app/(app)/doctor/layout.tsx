@@ -4,7 +4,7 @@ import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 
-// Session/loading is already guarded by app/(app)/layout.tsx — this only
+// Session/loading is already guarded by app/(app)/layout.tsx: this only
 // handles the role mismatch (a patient hitting a /doctor/* URL directly).
 export default function DoctorLayout({ children }: { children: React.ReactNode }) {
   const { role, loading } = useAuth();

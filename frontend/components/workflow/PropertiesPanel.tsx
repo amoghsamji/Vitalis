@@ -61,7 +61,7 @@ export function PropertiesPanel({ node, onChangeParams, onDelete }: PropertiesPa
       )}
 
       {data.kind === "condition" && data.check === "always_true" && (
-        <p className="text-xs text-muted-foreground">No parameters — this branch is always taken.</p>
+        <p className="text-xs text-muted-foreground">No parameters: this branch is always taken.</p>
       )}
 
       {data.kind === "action" && data.action === "send_sms" && (
@@ -111,7 +111,7 @@ export function PropertiesPanel({ node, onChangeParams, onDelete }: PropertiesPa
 
       {data.kind === "action" && !FUNCTIONAL_ACTIONS.includes(data.action) && (
         <p className="text-xs text-muted-foreground">
-          This action is a logged-only stub for now — it records that this step ran but doesn&apos;t call an external
+          This action is a logged-only stub: it records that this step ran but does not call an external
           service yet.
         </p>
       )}

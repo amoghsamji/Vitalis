@@ -11,20 +11,20 @@ interface EmptyStateProps {
 }
 
 // Page/section-level empties only ("No doctors found", "No appointments
-// yet") — not for small inline list-empty lines inside compact cards,
+// yet"): not for small inline list-empty lines inside compact cards,
 // where a full EmptyState would be oversized.
 export function EmptyState({ icon: Icon, message, cta, className }: EmptyStateProps) {
   return (
     <div
       className={cn(
-        "flex flex-col items-center gap-3 rounded-lg border border-dashed border-border py-10 text-center",
+        "flex flex-col items-center gap-3 rounded-[2px] border border-dashed border-border bg-card/40 py-10 text-center",
         className
       )}
     >
-      {Icon && <Icon className="h-8 w-8 text-muted-foreground/40" />}
-      <p className="text-sm text-muted-foreground">{message}</p>
+      {Icon && <Icon className="h-6 w-6 stroke-[1.5] text-muted-foreground/50" />}
+      <p className="font-serif text-sm text-muted-foreground max-w-prose">{message}</p>
       {cta && (
-        <Link href={cta.href} className={buttonVariants({ variant: "secondary", size: "sm" })}>
+        <Link href={cta.href} className={buttonVariants({ variant: "outline", size: "sm" })}>
           {cta.label}
         </Link>
       )}

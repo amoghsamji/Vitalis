@@ -2,21 +2,24 @@ import { type ButtonHTMLAttributes, forwardRef, type ReactNode } from "react";
 import { buttonVariants as shadcnButtonVariants } from "@/components/ui/shadcn/button";
 import { cn } from "@/lib/utils";
 
-export type ButtonVariant = "primary" | "secondary" | "danger" | "ghost";
-export type ButtonSize = "sm" | "md";
+export type ButtonVariant = "primary" | "secondary" | "danger" | "ghost" | "default" | "outline";
+export type ButtonSize = "sm" | "md" | "lg";
 
 // Vitalis's own variant/size names, mapped onto the shadcn button's variants
 // so every existing call site keeps working unchanged.
 const variantMap: Record<ButtonVariant, "default" | "outline" | "destructive" | "ghost"> = {
   primary: "default",
+  default: "default",
   secondary: "outline",
+  outline: "outline",
   danger: "destructive",
   ghost: "ghost",
 };
 
-const sizeMap: Record<ButtonSize, "default" | "sm"> = {
+const sizeMap: Record<ButtonSize, "default" | "sm" | "lg"> = {
   sm: "sm",
   md: "default",
+  lg: "lg",
 };
 
 export function buttonVariants({
