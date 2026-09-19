@@ -80,11 +80,23 @@ export default function PatientAppointmentsPage() {
                   <TableCell className="pl-5 font-medium">{new Date(appt.startTime).toLocaleString()}</TableCell>
                   <TableCell className="text-muted-foreground">{appt.consultationType}</TableCell>
                   <TableCell>
-                    <Badge variant={appt.status === "confirmed" ? "success" : "neutral"}>{appt.status}</Badge>
+                    <Badge
+                      variant={
+                        appt.status === "confirmed"
+                          ? "success"
+                          : appt.status === "pending"
+                            ? "warning"
+                            : appt.status === "rejected"
+                              ? "danger"
+                              : "neutral"
+                      }
+                    >
+                      {appt.status}
+                    </Badge>
                     {appt.status === "completed" && <FollowUpStatusBadge appointmentId={appt.id} />}
                   </TableCell>
                   <TableCell className="pr-5 text-right">
-                    {appt.status === "confirmed" && (
+                    {(appt.status === "confirmed" || appt.status === "pending") && (
                       <AlertDialog>
                         <AlertDialogTrigger asChild>
                           <Button variant="danger" size="sm" disabled={cancellingId === appt.id}>

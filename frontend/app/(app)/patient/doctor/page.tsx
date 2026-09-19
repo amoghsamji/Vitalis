@@ -76,7 +76,7 @@ function DoctorDetail() {
         session.idToken
       );
       setSlots((prev) => prev.filter((s) => s.startTime !== slot.startTime));
-      setMessage("Appointment booked!");
+      setMessage("Appointment requested — waiting for the doctor to confirm.");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Booking failed");
     } finally {

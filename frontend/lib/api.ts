@@ -96,6 +96,10 @@ export const api = {
     request<{ appointments: Appointment[] }>(`/doctors/${doctorId}/appointments`, { token }),
   markAppointmentCompleted: (id: string, token: string) =>
     request<Appointment>(`/appointments/${id}`, { method: "PUT", body: { status: "completed" }, token }),
+  acceptAppointment: (id: string, token: string) =>
+    request<Appointment>(`/appointments/${id}`, { method: "PUT", body: { status: "confirmed" }, token }),
+  rejectAppointment: (id: string, token: string) =>
+    request<Appointment>(`/appointments/${id}`, { method: "PUT", body: { status: "rejected" }, token }),
 
   // Prescriptions
   presignPrescription: (appointmentId: string, token: string) =>

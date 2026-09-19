@@ -42,6 +42,8 @@ export default function DoctorAppointmentsPage() {
   const [error, setError] = useState<string | null>(null);
   const [cancellingId, setCancellingId] = useState<string | null>(null);
   const [completingId, setCompletingId] = useState<string | null>(null);
+  const [respondingId, setRespondingId] = useState<string | null>(null);
+  const [respondError, setRespondError] = useState<string | null>(null);
   const [uploadedIds, setUploadedIds] = useState<Record<string, boolean>>({});
   const [issuedIds, setIssuedIds] = useState<Record<string, boolean>>({});
 
@@ -90,12 +92,27 @@ export default function DoctorAppointmentsPage() {
     }
   }
 
+  async function respond(id: string, accept: boolean) {
+    if (!session) return;
+    setRespondingId(id);
+    setRespondError(null);
+    try {
+      const newStatus = accept ? "confirmed" : "rejected";
+      accept ? await api.acceptAppointment(id, session.idToken) : await api.rejectAppointment(id, session.idToken);
+      setAppointments((prev) => prev.map((a) => (a.id === id ? { ...a, status: newStatus } : a)));
+    } catch (err) {
+      setRespondError(err instanceof ApiError ? err.message : "Failed to respond to this request");
+    } finally {
+      setRespondingId(null);
+    }
+  }
+
   if (loading) return <LoadingState />;
 
   return (
     <div className="flex flex-col gap-4">
       <PageHeader title="Appointments" />
-      {error && <p className="text-sm text-destructive">{error}</p>}
+      {(error || respondError) && <p className="text-sm text-destructive">{error || respondError}</p>}
       {appointments.length === 0 ? (
         <EmptyState message="No appointments yet." />
       ) : (
@@ -123,7 +140,15 @@ export default function DoctorAppointmentsPage() {
                   <TableCell>
                     <Badge
                       variant={
-                        appt.status === "confirmed" ? "success" : appt.status === "completed" ? "info" : "neutral"
+                        appt.status === "confirmed"
+                          ? "success"
+                          : appt.status === "completed"
+                            ? "info"
+                            : appt.status === "pending"
+                              ? "warning"
+                              : appt.status === "rejected"
+                                ? "danger"
+                                : "neutral"
                       }
                     >
                       {appt.status}
@@ -136,6 +161,25 @@ export default function DoctorAppointmentsPage() {
                   </TableCell>
                   <TableCell className="pr-5 text-right">
                     <div className="flex flex-col items-end gap-2">
+                      {appt.status === "pending" && (
+                        <div className="flex gap-2">
+                          <Button
+                            size="sm"
+                            disabled={respondingId === appt.id}
+                            onClick={() => respond(appt.id, true)}
+                          >
+                            {respondingId === appt.id ? "Accepting..." : "Accept"}
+                          </Button>
+                          <Button
+                            variant="danger"
+                            size="sm"
+                            disabled={respondingId === appt.id}
+                            onClick={() => respond(appt.id, false)}
+                          >
+                            {respondingId === appt.id ? "Declining..." : "Decline"}
+                          </Button>
+                        </div>
+                      )}
                       {appt.status === "confirmed" && (
                         <div className="flex gap-2">
                           <Button

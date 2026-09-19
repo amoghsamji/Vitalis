@@ -93,7 +93,7 @@ export interface Appointment {
   patientId: string;
   startTime: string;
   consultationType: string;
-  status: "confirmed" | "cancelled" | string;
+  status: "pending" | "confirmed" | "rejected" | "cancelled" | "completed" | string;
   createdAt: string;
 }
 

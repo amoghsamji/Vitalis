@@ -114,7 +114,7 @@ export const handler = async (event: any) => {
       patientId,
       startTime: slotStartTime,
       consultationType: consultationType || "video",
-      status: "confirmed",
+      status: "pending",
       createdAt: new Date().toISOString(),
     };
     await ddb.send(new PutCommand({ TableName: TABLE_NAME, Item: appt }));
@@ -203,6 +203,55 @@ export const handler = async (event: any) => {
         })
       );
       await emitPrescriptionUploadedIfReady(apptId);
+      return jsonResponse(200, result.Attributes);
+    }
+
+    // Doctor accept/reject of a pending booking request. Kept as its own
+    // explicit branch for the same reason as "completed" above — this is a
+    // real, ownership-checked, conditional update, not the buggy generic
+    // fallback below.
+    if (body.status === "confirmed" || body.status === "rejected") {
+      const existing = await ddb.send(
+        new GetCommand({ TableName: TABLE_NAME, Key: { PK: `APPT#${apptId}`, SK: "DETAILS" } })
+      );
+      if (!existing.Item) return jsonResponse(404, { message: "Appointment not found" });
+      if (existing.Item.doctorId !== claims.sub) {
+        return jsonResponse(403, { message: "Only the assigned doctor can respond to this request" });
+      }
+
+      let result;
+      try {
+        result = await ddb.send(
+          new UpdateCommand({
+            TableName: TABLE_NAME,
+            Key: { PK: `APPT#${apptId}`, SK: "DETAILS" },
+            UpdateExpression: "SET #s = :s, updatedAt = :now",
+            ConditionExpression: "#s = :pending",
+            ExpressionAttributeNames: { "#s": "status" },
+            ExpressionAttributeValues: { ":s": body.status, ":pending": "pending", ":now": new Date().toISOString() },
+            ReturnValues: "ALL_NEW",
+          })
+        );
+      } catch (err) {
+        if (err instanceof ConditionalCheckFailedException) {
+          return jsonResponse(409, { message: "This request has already been responded to" });
+        }
+        throw err;
+      }
+
+      if (body.status === "rejected") {
+        // Release the slot back to open, same as cancellation.
+        await ddb.send(
+          new UpdateCommand({
+            TableName: TABLE_NAME,
+            Key: { PK: `DOCTOR#${existing.Item.doctorId}`, SK: `SLOT#${existing.Item.startTime}` },
+            UpdateExpression: "SET #s = :open REMOVE heldBy",
+            ExpressionAttributeNames: { "#s": "status" },
+            ExpressionAttributeValues: { ":open": "open" },
+          })
+        );
+      }
+
       return jsonResponse(200, result.Attributes);
     }
 

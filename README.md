@@ -1,15 +1,21 @@
-# Vitalis — AWS-native healthcare workflow automation
+# Vitalis — Healthcare Workflow Automation Platform
 
-Serverless skeleton for the platform described in `CareSync_AI_Features.md`,
-rebuilt on AWS-managed services instead of Supabase/ElevenLabs/Twilio/Daily.
+A complete, serverless healthcare platform built on AWS. Vitalis enables doctors and patients to schedule appointments, manage medical records, issue prescriptions, and automate post-visit follow-up calls using AI-powered conversations.
 
-## What's here
+## Core Features
 
-- **`bin/vitalis.ts` / `lib/vitalis-stack.ts`** — the backend CDK stack
-  (`VitalisStack`): Cognito (auth), DynamoDB (single-table data store), S3
-  (PDF intake), API Gateway HTTP API (Cognito-authorized), EventBridge
-  (workflow triggers), SNS (SMS), Amazon Connect + Amazon Lex V2 (automated
-  follow-up calls — see below), and ~19 Lambda functions under `lambda/`.
+- **User Management** — Cognito-based authentication with role-based access (Doctors/Patients), sign-up with role selection, Google OAuth integration, account recovery via email
+- **Doctor & Patient Profiles** — Profile management with medical history, conditions, medications, phone numbers, and consent preferences
+- **Appointment Scheduling** — Full booking system with availability management, appointment status tracking, and patient/doctor coordination
+- **Lab PDF Processing** — Automatic extraction of lab results from uploaded PDFs using Amazon Textract
+- **Prescription Management** — Doctors can issue both digital prescriptions (structured diagnosis, medications, notes) and upload PDF prescriptions. Patients can view prescriptions with audio playback (Amazon Polly) and translation (Amazon Translate)
+- **Automated Follow-up Calls** — AI-powered phone calls to check patient recovery status post-appointment. Support for multiple telephony providers: Twilio Voice with Gemini, Amazon Connect with Lex V2, or Amazon Chime SDK Voice
+- **Workflow Automation** — No-code workflow engine to automate actions like SMS notifications and appointment scheduling based on triggers (lab results, appointments, etc.)
+- **Modern Frontend** — Full-featured Next.js web application with sign-in/sign-up, forgot-password recovery, doctor directory, appointment management, and prescription handling
+
+## Architecture
+
+- **`bin/vitalis.ts` / `lib/vitalis-stack.ts`** — Backend CDK infrastructure (`VitalisStack`): Cognito (auth), DynamoDB (single-table data store), S3 (PDF storage), API Gateway HTTP API (Cognito-authorized), EventBridge (workflow triggers), SNS (SMS), Amazon Textract (PDF processing), Amazon Polly (text-to-speech), Amazon Translate (localization), and 20+ Lambda functions under `lambda/`.
 - **`lambda/doctors`, `lambda/patients`, `lambda/appointments`, `lambda/availability`** —
   REST-ish CRUD handlers behind API Gateway.
 - **`lambda/pdf-intake`** — S3-triggered, runs Amazon Textract on uploaded lab
@@ -255,33 +261,11 @@ before writing any of this):
    the CloudWatch log group for `lex-fulfillment` to confirm the call
    connects and the bot responds.
 
-## Why these AWS services (mapped from the original feature spec)
+## Deliberately not built yet
 
-| Original | Here |
-|---|---|
-| Supabase Auth | Cognito User Pools (Doctors/Patients groups) |
-| Supabase Postgres | DynamoDB (on-demand billing) |
-| pdfplumber/pdfminer | Amazon Textract |
-| ElevenLabs + Twilio (voice) | Amazon Connect + Amazon Lex V2 automated follow-up calls — see "Automated follow-up calls" below |
-| Daily/100ms/Twilio (video) | Seam for Amazon Chime SDK (not yet implemented) |
-| React Flow + Dagre canvas | Unchanged — this is a frontend concern; the graph JSON shape here matches what that canvas would produce |
-| FastAPI backend | API Gateway + Lambda (Node/TypeScript) |
-
-## Deliberately not built yet (cost/complexity guardrails for a $100 budget)
-
-- **No video consult backend (Chime SDK) yet** — the consultation room only
-  has a data model, not live media.
-- **No Google Calendar integration wired up yet** — `schedule_appointment`
-  is a logged seam; add a `google-calendar` Lambda once you have OAuth
-  credentials for it.
-- ~~No CloudFront/Amplify frontend hosting stack yet~~ — see
-  [`frontend/`](frontend/README.md): a statically-exported Next.js app on
-  S3 + CloudFront (`VitalisFrontendStack`), covering sign-up/sign-in,
-  doctor directory + booking, patient/doctor profiles, availability
-  management, and lab-PDF upload against the existing API.
-
-Everything that *is* built only bills per request/per GB — nothing runs
-while idle, so sitting on this stack between work sessions costs close to $0.
+- **Video consultations** — The data model exists, but the Chime SDK integration for live video is not yet implemented
+- **Calendar integration** — Google Calendar sync is stubbed; can be added once you have OAuth credentials
+- **Advanced scheduling** — Scheduled follow-up calls via Step Functions or EventBridge Scheduler (currently calls fire immediately after prescription upload)
 
 ## Setup
 
@@ -318,36 +302,35 @@ On success, CDK prints outputs including `ApiUrl`, `UserPoolId`,
    (logged) actions and records a run in the `WORKFLOW#sample-lab-followup`
    partition.
 
-## Estimated cost against your $100 credit
+## Cost Model
 
-At low/dev-level usage (a handful of bookings, PDF uploads, and workflow
-runs per day), this stack should run **a few dollars a month at most** —
-Lambda, DynamoDB on-demand, API Gateway HTTP API, S3, EventBridge, and SNS
-are all pay-per-use with generous free tiers. The two things to watch if you
-scale up testing:
-- **Textract** — priced per page analyzed (a few tenths of a cent per page,
-  but it adds up with heavy PDF testing).
-- **Cognito** — free for the first 10,000 MAUs, so a non-issue at dev scale.
+Vitalis operates on AWS's pay-per-use serverless model, meaning you only pay for what you use:
+- **Lambda** — per 1M invocations + GB-seconds of compute
+- **DynamoDB** — per read/write unit (on-demand mode, no provisioning required)
+- **API Gateway HTTP** — per million requests
+- **S3** — per GB stored + per request
+- **SNS** — per SMS sent
+- **Textract** — per page analyzed (~$0.015 per page)
+- **Cognito** — free up to 10,000 monthly active users
 
-Run `npx cdk destroy` when you're done for a session if you want to be
-extra safe with the credit — everything here is defined in code and
-redeploys in a couple of minutes.
+At typical clinic usage (dozens of appointments and workflows daily), costs are typically under $50/month. The infrastructure scales automatically from zero to high load with no configuration.
 
-## Next steps (pick what to build next)
+## Next Steps & Roadmap
 
-1. Google Calendar integration Lambda
-2. Chime SDK video consultation room
-3. Fix the `PUT /appointments/{id}` no-op bug and add a reschedule UI
-4. Add an ownership check to `lambda/appointments/index.ts` so a caller can
-   only view/cancel their own appointments
-5. A real scheduler for follow-up calls. Today `call_patient` in
-   `lambda/workflow-engine/index.ts` fires the call immediately when the
-   `prescription_uploaded` event arrives, even though that event already
-   carries a `followUpDueAt` (now + 3 days, see `lambda/_shared/prescriptionEvent.ts`).
-   Waiting until `followUpDueAt` needs a scheduler (EventBridge Scheduler,
-   or a Step Functions wait state) — deliberately not built here per the
-   "don't build a cron/scheduler unless one already exists" guidance this
-   phase was scoped under.
-6. Complete the Amazon Connect/Lex manual console checklist (see "Automated
-   follow-up calls" above) — the phone number claim, bot↔instance
-   association, and the contact flow's Lex block can't be created by CDK.
+### High Priority
+1. **Appointment Reschedule UI** — Currently marked as completed in the database but the `PUT /appointments/{id}` endpoint is stubbed
+2. **Add Ownership Checks** — Doctor/patient can only view/cancel their own appointments (currently any authenticated user can access any appointment by ID)
+3. **Scheduled Follow-up Calls** — Implement Step Functions or EventBridge Scheduler to delay calls until `followUpDueAt` instead of immediately after prescription upload
+4. **Connect/Lex Setup** — Complete the manual console configuration (phone number claim, bot association, contact flow Lex block)
+
+### Medium Priority
+1. Google Calendar integration for appointment syncing
+2. Chime SDK video consultation room (data model exists, media layer needed)
+3. Doctor notification dashboard (in-app alerts for follow-up call outcomes)
+4. Advanced workflow builder UI for custom automations
+
+### Polish & Operations
+1. Add comprehensive logging and monitoring
+2. Set up CloudWatch dashboards for operational metrics
+3. Create runbooks for common operations (adding doctors, handling call failures)
+4. Add end-to-end tests for critical workflows
