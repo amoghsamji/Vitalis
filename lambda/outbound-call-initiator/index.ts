@@ -4,11 +4,17 @@ import {
   ConnectClient,
   StartOutboundVoiceContactCommand,
 } from "@aws-sdk/client-connect";
+import {
+  ChimeSDKVoiceClient,
+  CreateSipMediaApplicationCallCommand,
+} from "@aws-sdk/client-chime-sdk-voice";
+import twilio from "twilio";
 import { ddb, TABLE_NAME, jsonResponse, getClaims } from "../_shared/ddb";
-import { recordCallEvent, findActiveFollowUpCallForAppointment } from "../_shared/callAudit";
+import { recordCallEvent, updateCallStatus, findActiveFollowUpCallForAppointment } from "../_shared/callAudit";
 import { randomUUID } from "crypto";
 
 const connect = new ConnectClient({});
+const chimeVoice = new ChimeSDKVoiceClient({});
 
 const MAX_ATTEMPTS = 3;
 const BASE_BACKOFF_MS = 250;
@@ -22,12 +28,13 @@ const BASE_BACKOFF_MS = 250;
  *
  * Both paths converge on dialCall(), which re-checks patient consent and the
  * appointment's completed+prescription-uploaded state fresh (never trusts
- * whatever was true when the call was first requested), then calls
- * StartOutboundVoiceContact with ONLY the five whitelisted, non-sensitive
- * contact attributes. Retries (exponential backoff, capped at MAX_ATTEMPTS)
- * only wrap the StartOutboundVoiceContact call itself — i.e. only technical
- * initiation failures — never a business-rule rejection (opted out, not
- * eligible), and never after the patient has explicitly declined/opted out.
+ * whatever was true when the call was first requested), then places the call
+ * via whichever telephony provider CDK enabled (see CALL_PROVIDER below) with
+ * ONLY the five whitelisted, non-sensitive contact attributes. Retries
+ * (exponential backoff, capped at MAX_ATTEMPTS) only wrap the initiation API
+ * call itself — i.e. only technical initiation failures — never a
+ * business-rule rejection (opted out, not eligible), and never after the
+ * patient has explicitly declined/opted out.
  */
 export const handler = async (event: any) => {
   // API Gateway path
@@ -131,6 +138,23 @@ async function requestFollowUpCall(appointmentId: string, doctorId: string, pati
     throw err;
   }
 
+  // Pointer item so lambda/follow-up-calls can list a doctor's full call
+  // history (GET /follow-up-calls with no appointmentId), not just one
+  // appointment's — same pattern as the DOCTOR_INDEX pointers used for
+  // appointments/prescriptions.
+  await ddb.send(
+    new PutCommand({
+      TableName: TABLE_NAME,
+      Item: {
+        PK: `FOLLOWUP_CALL#${followUpCallId}`,
+        SK: "DOCTOR_INDEX",
+        GSI1PK: `DOCTOR_FOLLOWUPS#${doctorId}`,
+        GSI1SK: new Date().toISOString(),
+        followUpCallId,
+      },
+    })
+  );
+
   await recordCallEvent(followUpCallId, "requested", { appointmentId, doctorId, patientId });
 
   const result = await dialCall(followUpCallId);
@@ -154,44 +178,58 @@ async function dialCall(followUpCallId: string) {
 
   if (!patient?.followUpCallsEnabled || !patient?.phone) {
     await recordCallEvent(followUpCallId, "opted_out", { reason: "not_eligible_at_dial_time" });
+    await updateCallStatus(followUpCallId, "opted_out");
     return { ok: false, reason: "not_eligible" };
   }
   if (appt?.status !== "completed") {
     await recordCallEvent(followUpCallId, "failed", { reason: "appointment_not_completed", retryable: false });
+    await updateCallStatus(followUpCallId, "failed");
     return { ok: false, reason: "appointment_not_completed" };
+  }
+
+  // Which telephony provider actually places the call is decided entirely by
+  // CDK context, not by anything here — see lib/vitalis-stack.ts. Both
+  // Amazon Connect and Amazon Chime SDK Voice can be provisioned side by
+  // side (each behind its own flag); CALL_PROVIDER picks whichever one is
+  // live. Unset (neither flag passed at deploy) fails fast and clearly
+  // rather than attempting a call against placeholder resource ids.
+  const provider = process.env.CALL_PROVIDER;
+  if (provider !== "connect" && provider !== "chime" && provider !== "twilio") {
+    await recordCallEvent(followUpCallId, "failed", {
+      error:
+        "No telephony provider configured (deploy with -c enableConnectLex=true, -c enableChimeVoice=true, or -c enableTwilioVoice=true)",
+      retryable: false,
+    });
+    await updateCallStatus(followUpCallId, "failed");
+    return { ok: false, reason: "no_call_provider_configured" };
   }
 
   let lastErr: unknown;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     try {
-      const result = await connect.send(
-        new StartOutboundVoiceContactCommand({
-          DestinationPhoneNumber: patient.phone,
-          ContactFlowId: process.env.CONNECT_CONTACT_FLOW_ID,
-          InstanceId: process.env.CONNECT_INSTANCE_ID,
-          // Minimal, non-sensitive contact attributes only — per spec, never
-          // prescription contents/diagnosis. fetch-patient-context resolves
-          // everything else server-side from these five IDs.
-          Attributes: {
-            patientId: call.patientId,
-            appointmentId: call.appointmentId,
-            prescriptionId: call.prescriptionId,
-            doctorId: call.doctorId,
-            followUpCallId,
-          },
-        })
-      );
-      await recordCallEvent(followUpCallId, "initiated", { connectContactId: result.ContactId, attempt });
-      return { ok: true, contactId: result.ContactId };
+      const placed =
+        provider === "connect"
+          ? await placeConnectCall(call, followUpCallId, patient.phone)
+          : provider === "chime"
+            ? await placeChimeCall(call, followUpCallId, patient.phone)
+            : await placeTwilioCall(call, followUpCallId, patient.phone);
+      await recordCallEvent(followUpCallId, "initiated", { ...placed, provider, attempt });
+      await updateCallStatus(followUpCallId, "initiated", {
+        provider,
+        ...("twilioCallSid" in placed ? { twilioCallSid: placed.twilioCallSid } : {}),
+      });
+      return { ok: true, provider, ...placed };
     } catch (err) {
       lastErr = err;
-      const retryable = isRetryableConnectError(err);
+      const retryable = isRetryableCallError(err);
       if (!retryable || attempt === MAX_ATTEMPTS) {
         await recordCallEvent(followUpCallId, "failed", {
           error: err instanceof Error ? err.message : String(err),
           attempt,
           retryable,
+          provider,
         });
+        await updateCallStatus(followUpCallId, "failed");
         return { ok: false, reason: "initiation_failed" };
       }
       await sleep(BASE_BACKOFF_MS * 2 ** (attempt - 1));
@@ -200,10 +238,88 @@ async function dialCall(followUpCallId: string) {
   return { ok: false, reason: "initiation_failed", error: lastErr };
 }
 
-/** Only transient/technical Connect errors are worth retrying. */
-function isRetryableConnectError(err: unknown): boolean {
+async function placeConnectCall(call: Record<string, any>, followUpCallId: string, patientPhone: string) {
+  const result = await connect.send(
+    new StartOutboundVoiceContactCommand({
+      DestinationPhoneNumber: patientPhone,
+      ContactFlowId: process.env.CONNECT_CONTACT_FLOW_ID,
+      InstanceId: process.env.CONNECT_INSTANCE_ID,
+      // Connect requires one of these to know what to dial *from*.
+      // SOURCE_PHONE_NUMBER is set once a number is claimed in the Connect
+      // instance (see vitalis-stack.ts); until then this is undefined and
+      // the call fails fast with a clear Connect error instead of silently
+      // misdialing.
+      SourcePhoneNumber: process.env.CONNECT_SOURCE_PHONE_NUMBER,
+      // Minimal, non-sensitive contact attributes only — per spec, never
+      // prescription contents/diagnosis. fetch-patient-context resolves
+      // everything else server-side from these five IDs.
+      Attributes: {
+        patientId: call.patientId,
+        appointmentId: call.appointmentId,
+        prescriptionId: call.prescriptionId,
+        doctorId: call.doctorId,
+        followUpCallId,
+      },
+    })
+  );
+  return { connectContactId: result.ContactId };
+}
+
+async function placeChimeCall(call: Record<string, any>, followUpCallId: string, patientPhone: string) {
+  const result = await chimeVoice.send(
+    new CreateSipMediaApplicationCallCommand({
+      FromPhoneNumber: process.env.CHIME_SOURCE_PHONE_NUMBER,
+      ToPhoneNumber: patientPhone,
+      SipMediaApplicationId: process.env.CHIME_SIP_MEDIA_APPLICATION_ID,
+      // Same five non-sensitive ids as the Connect path, delivered to
+      // chime-sma-handler's NEW_OUTBOUND_CALL event as event.ArgumentsMap.
+      ArgumentsMap: {
+        patientId: call.patientId,
+        appointmentId: call.appointmentId,
+        prescriptionId: call.prescriptionId,
+        doctorId: call.doctorId,
+        followUpCallId,
+      },
+    })
+  );
+  return { chimeTransactionId: result.SipMediaApplicationCall?.TransactionId };
+}
+
+async function placeTwilioCall(call: Record<string, any>, followUpCallId: string, patientPhone: string) {
+  const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+  const base = process.env.PUBLIC_API_BASE_URL;
+
+  // Twilio has no ArgumentsMap/contact-attributes equivalent — the call's
+  // identifying id travels as a query param on the webhook URLs it's given
+  // instead (lambda/twilio-voice reads it back on every turn).
+  const result = await client.calls.create({
+    to: patientPhone,
+    from: process.env.TWILIO_PHONE_NUMBER as string,
+    url: `${base}/follow-up-calls/twilio/answer?followUpCallId=${followUpCallId}`,
+    statusCallback: `${base}/follow-up-calls/twilio/status?followUpCallId=${followUpCallId}`,
+    statusCallbackEvent: ["initiated", "ringing", "answered", "completed"],
+  });
+  return { twilioCallSid: result.sid };
+}
+
+/** Only transient/technical provider errors are worth retrying. */
+function isRetryableCallError(err: unknown): boolean {
   const name = (err as any)?.name ?? "";
-  return ["ThrottlingException", "InternalServiceException", "TooManyRequestsException"].includes(name);
+  if (name === "RestException" && typeof (err as any)?.status === "number") {
+    // Twilio's SDK throws RestException for both 429s and 5xx transport
+    // failures — only those are worth retrying, never a 4xx business
+    // rejection (bad number, unverified trial destination, etc).
+    const status = (err as any).status;
+    return status === 429 || status >= 500;
+  }
+  return [
+    "ThrottlingException",
+    "InternalServiceException",
+    "TooManyRequestsException",
+    // Chime SDK Voice's equivalents
+    "ServiceUnavailableException",
+    "ServiceFailureException",
+  ].includes(name);
 }
 
 function sleep(ms: number) {

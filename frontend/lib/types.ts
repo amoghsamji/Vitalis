@@ -36,14 +36,37 @@ export interface Patient {
   followUpCallsEnabled?: boolean;
 }
 
+export interface PrescriptionMedicationItem {
+  name: string;
+  dosage: string;
+  frequency: string;
+  duration?: string;
+  instructions?: string;
+}
+
 export interface Prescription {
   id: string;
   appointmentId: string;
   patientId: string;
   doctorId: string;
-  key: string;
-  uploadedAt: string;
-  followUpSummary: string | null;
+  type: "pdf" | "digital";
+  // "pdf" fields
+  key?: string;
+  uploadedAt?: string;
+  followUpSummary?: string | null;
+  // "digital" fields
+  diagnosis?: string | null;
+  notes?: string | null;
+  medications?: PrescriptionMedicationItem[];
+  issuedAt?: string;
+}
+
+export interface TranslatedPrescription {
+  targetLanguage: string;
+  diagnosis?: string | null;
+  notes?: string | null;
+  followUpSummary?: string | null;
+  medications?: PrescriptionMedicationItem[] | null;
 }
 
 export interface Condition {
@@ -143,12 +166,32 @@ export interface Workflow {
 }
 
 // Mirrors lambda/_shared/callAudit.ts's CallEventName + FOLLOWUP_CALL# item shape.
-export type FollowUpCallStatus = "requested" | "initiated" | "in_progress" | "completed" | "failed" | "opted_out";
+// Backend actually sets "ended" (not "completed") on real completion — both
+// are kept here since "completed" was the original documented vocabulary.
+export type FollowUpCallStatus =
+  | "requested"
+  | "initiated"
+  | "in_progress"
+  | "completed"
+  | "ended"
+  | "failed"
+  | "opted_out";
+
+export type CallProvider = "connect" | "chime" | "twilio";
 
 export interface FollowUpCall {
   id: string;
   appointmentId: string;
+  doctorId?: string;
+  patientId?: string;
   status: FollowUpCallStatus | string;
+  provider?: CallProvider | string;
+  outcome?: string | null;
+  appointmentBooked?: boolean;
+  bookedAppointmentId?: string | null;
+  duration?: number;
+  answeredAt?: string;
+  endedAt?: string;
   createdAt: string;
 }
 

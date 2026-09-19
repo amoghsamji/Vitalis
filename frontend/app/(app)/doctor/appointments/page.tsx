@@ -4,13 +4,23 @@ import { useEffect, useRef, useState } from "react";
 import { api, ApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { resolvePatientNames } from "@/lib/resolvePatientNames";
-import type { Appointment, FollowUpCall, FollowUpCallEvent } from "@/lib/types";
+import type { Appointment, FollowUpCall, FollowUpCallEvent, PrescriptionMedicationItem } from "@/lib/types";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { LoadingState } from "@/components/ui/LoadingState";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Card } from "@/components/ui/Card";
+import { Input } from "@/components/ui/shadcn/input";
+import { Textarea } from "@/components/ui/shadcn/textarea";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/shadcn/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/shadcn/table";
 import {
   AlertDialog,
@@ -33,6 +43,7 @@ export default function DoctorAppointmentsPage() {
   const [cancellingId, setCancellingId] = useState<string | null>(null);
   const [completingId, setCompletingId] = useState<string | null>(null);
   const [uploadedIds, setUploadedIds] = useState<Record<string, boolean>>({});
+  const [issuedIds, setIssuedIds] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     if (!session) return;
@@ -160,14 +171,25 @@ export default function DoctorAppointmentsPage() {
                           </AlertDialog>
                         </div>
                       )}
-                      {appt.status === "completed" && !uploadedIds[appt.id] && (
-                        <PrescriptionUpload
-                          appointmentId={appt.id}
-                          onUploaded={() => setUploadedIds((prev) => ({ ...prev, [appt.id]: true }))}
-                        />
-                      )}
-                      {appt.status === "completed" && uploadedIds[appt.id] && (
-                        <FollowUpCallPanel appointmentId={appt.id} />
+                      {appt.status === "completed" && (
+                        <>
+                          {!issuedIds[appt.id] ? (
+                            <IssuePrescriptionModal
+                              appointmentId={appt.id}
+                              onIssued={() => setIssuedIds((prev) => ({ ...prev, [appt.id]: true }))}
+                            />
+                          ) : (
+                            <Badge variant="success">Prescription issued</Badge>
+                          )}
+                          {!uploadedIds[appt.id] ? (
+                            <PrescriptionUpload
+                              appointmentId={appt.id}
+                              onUploaded={() => setUploadedIds((prev) => ({ ...prev, [appt.id]: true }))}
+                            />
+                          ) : (
+                            <FollowUpCallPanel appointmentId={appt.id} patientId={appt.patientId} />
+                          )}
+                        </>
                       )}
                     </div>
                   </TableCell>
@@ -181,12 +203,18 @@ export default function DoctorAppointmentsPage() {
   );
 }
 
-function FollowUpCallPanel({ appointmentId }: { appointmentId: string }) {
+function maskPhone(phone: string): string {
+  if (phone.length <= 7) return phone;
+  return `${phone.slice(0, 3)}${"*".repeat(phone.length - 7)}${phone.slice(-4)}`;
+}
+
+function FollowUpCallPanel({ appointmentId, patientId }: { appointmentId: string; patientId: string }) {
   const { session } = useAuth();
   const [call, setCall] = useState<FollowUpCall | null>(null);
   const [events, setEvents] = useState<FollowUpCallEvent[]>([]);
   const [starting, setStarting] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [patientPhone, setPatientPhone] = useState<string | null>(null);
 
   async function refresh() {
     if (!session) return;
@@ -197,6 +225,12 @@ function FollowUpCallPanel({ appointmentId }: { appointmentId: string }) {
 
   useEffect(() => {
     refresh();
+    if (session) {
+      api
+        .getPatient(patientId, session.idToken)
+        .then((p) => setPatientPhone(p.phone || null))
+        .catch(() => {});
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session, appointmentId]);
 
@@ -217,9 +251,13 @@ function FollowUpCallPanel({ appointmentId }: { appointmentId: string }) {
 
   return (
     <div className="flex w-full max-w-xs flex-col items-end gap-1.5 text-xs">
+      {patientPhone && <span className="text-muted-foreground">Phone: {maskPhone(patientPhone)}</span>}
+      <span className="text-muted-foreground">Prescription: Uploaded</span>
       {call ? (
         <>
           <Badge variant={call.status === "failed" ? "neutral" : "info"}>Follow-up call: {call.status}</Badge>
+          {call.outcome && <span className="text-muted-foreground">Outcome: {call.outcome}</span>}
+          {call.appointmentBooked && <Badge variant="success">Appointment booked</Badge>}
           {events.length > 0 && (
             <ul className="w-full list-none text-right text-[11px] text-muted-foreground">
               {events
@@ -288,5 +326,121 @@ function PrescriptionUpload({ appointmentId, onUploaded }: { appointmentId: stri
       </Button>
       {status && <span className="text-xs text-destructive">{status}</span>}
     </div>
+  );
+}
+
+const emptyMedication: PrescriptionMedicationItem = { name: "", dosage: "", frequency: "", duration: "", instructions: "" };
+
+function IssuePrescriptionModal({ appointmentId, onIssued }: { appointmentId: string; onIssued: () => void }) {
+  const { session } = useAuth();
+  const [open, setOpen] = useState(false);
+  const [diagnosis, setDiagnosis] = useState("");
+  const [notes, setNotes] = useState("");
+  const [medications, setMedications] = useState<PrescriptionMedicationItem[]>([{ ...emptyMedication }]);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function updateMedication(index: number, field: keyof PrescriptionMedicationItem, value: string) {
+    setMedications((prev) => prev.map((m, i) => (i === index ? { ...m, [field]: value } : m)));
+  }
+
+  function addMedication() {
+    setMedications((prev) => [...prev, { ...emptyMedication }]);
+  }
+
+  function removeMedication(index: number) {
+    setMedications((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  async function submit() {
+    if (!session) return;
+    const cleaned = medications
+      .map((m) => ({ ...m, name: m.name.trim(), dosage: m.dosage.trim(), frequency: m.frequency.trim() }))
+      .filter((m) => m.name && m.dosage && m.frequency);
+    if (cleaned.length === 0) {
+      setError("Add at least one medication with a name, dosage, and frequency.");
+      return;
+    }
+    setSubmitting(true);
+    setError(null);
+    try {
+      await api.issuePrescription(
+        { appointmentId, diagnosis: diagnosis.trim() || undefined, notes: notes.trim() || undefined, medications: cleaned },
+        session.idToken
+      );
+      onIssued();
+      setOpen(false);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Failed to issue prescription");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button size="sm">Issue prescription</Button>
+      </DialogTrigger>
+      <DialogContent className="max-w-xl">
+        <DialogHeader>
+          <DialogTitle>Issue prescription</DialogTitle>
+        </DialogHeader>
+        <div className="flex flex-col gap-3 text-left">
+          <div className="flex flex-col gap-1.5">
+            <label className="text-xs font-medium text-muted-foreground">Diagnosis</label>
+            <Input value={diagnosis} onChange={(e) => setDiagnosis(e.target.value)} placeholder="e.g. Acute sinusitis" />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <label className="text-xs font-medium text-muted-foreground">Medications</label>
+            {medications.map((med, i) => (
+              <div key={i} className="flex flex-col gap-1.5 rounded-md border border-border p-2.5">
+                <div className="grid grid-cols-2 gap-2">
+                  <Input placeholder="Name" value={med.name} onChange={(e) => updateMedication(i, "name", e.target.value)} />
+                  <Input
+                    placeholder="Dosage (e.g. 500mg)"
+                    value={med.dosage}
+                    onChange={(e) => updateMedication(i, "dosage", e.target.value)}
+                  />
+                  <Input
+                    placeholder="Frequency (e.g. twice daily)"
+                    value={med.frequency}
+                    onChange={(e) => updateMedication(i, "frequency", e.target.value)}
+                  />
+                  <Input
+                    placeholder="Duration (e.g. 7 days)"
+                    value={med.duration}
+                    onChange={(e) => updateMedication(i, "duration", e.target.value)}
+                  />
+                </div>
+                <Input
+                  placeholder="Instructions (e.g. take with food)"
+                  value={med.instructions}
+                  onChange={(e) => updateMedication(i, "instructions", e.target.value)}
+                />
+                {medications.length > 1 && (
+                  <Button variant="ghost" size="sm" className="self-end" onClick={() => removeMedication(i)}>
+                    Remove
+                  </Button>
+                )}
+              </div>
+            ))}
+            <Button variant="secondary" size="sm" className="self-start" onClick={addMedication}>
+              Add medication
+            </Button>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <label className="text-xs font-medium text-muted-foreground">Notes for patient</label>
+            <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Optional" />
+          </div>
+          {error && <p className="text-sm text-destructive">{error}</p>}
+        </div>
+        <DialogFooter>
+          <Button onClick={submit} disabled={submitting}>
+            {submitting ? "Issuing..." : "Issue prescription"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

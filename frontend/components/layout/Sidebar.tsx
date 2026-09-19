@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Calendar, Clock, LayoutDashboard, Search, User, Workflow } from "lucide-react";
+import { Calendar, Clock, FileText, LayoutDashboard, Phone, Search, User, Workflow } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Role } from "@/lib/types";
 
@@ -10,12 +10,14 @@ const patientLinks = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/patient/doctors", label: "Find a doctor", icon: Search },
   { href: "/patient/appointments", label: "My appointments", icon: Calendar },
+  { href: "/patient/prescriptions", label: "Prescriptions", icon: FileText },
   { href: "/patient/profile", label: "Profile", icon: User },
 ];
 
 const doctorLinks = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/doctor/appointments", label: "Appointments", icon: Calendar },
+  { href: "/doctor/follow-up-calls", label: "Call history", icon: Phone },
   { href: "/doctor/availability", label: "Availability", icon: Clock },
   { href: "/doctor/workflows", label: "Workflows", icon: Workflow },
   { href: "/doctor/profile", label: "Profile", icon: User },

@@ -32,6 +32,11 @@ Two CDK stacks, deployed independently, defined in TypeScript
   — S3 (private, OAC) + CloudFront serving a statically-exported Next.js app
   from `frontend/out`. No server compute at rest, matching the backend's
   cost philosophy. `BucketDeployment` auto-syncs and invalidates on deploy.
+  **This AWS account currently can't create CloudFront distributions**
+  ("account must be verified... contact AWS Support" — a fraud-prevention
+  hold on new accounts, confirmed via an actual deploy attempt) — see
+  "Deployment status" below for the S3-website fallback in use until that's
+  lifted.
 
 The frontend is a fully separate `frontend/` npm project (own
 `package.json`), a Next.js 14 App Router app using `output: "export"`. It's
@@ -77,12 +82,39 @@ frontend and two undiscovered gaps.
 5. **Added `esbuild` as a devDependency** so CDK's `NodejsFunction` bundles
    Lambdas locally instead of falling back to Docker.
 
-**Verified locally** (not yet deployed to AWS): `npm run build` (root tsc),
-`npx cdk synth` for both stacks (using a temporary placeholder
-`frontend/out` for the frontend stack, since real output only exists after
-`next build`), and `cd frontend && npm run build` (Next static export, with
-placeholder env vars) all succeed. No AWS credentials have been used or
-configured by Claude — deployment is entirely the user's action to take.
+**Verified locally at the time**: `npm run build` (root tsc), `npx cdk synth`
+for both stacks, and `cd frontend && npm run build` all succeeded. Both
+stacks have since actually been deployed — see "Deployment status" below,
+which supersedes the "not yet deployed" framing this paragraph originally had.
+
+## Since that session: call providers + prescriptions (uncommitted as of this
+## writing — see `git status`)
+
+Amazon Connect (for automated follow-up calls) turned out to be unusable on
+this AWS account: it's billed through AISPL (the India-billed reseller
+entity), and AISPL accounts are blocked from creating Amazon Connect
+instances in every region — confirmed by an actual deploy attempt, not
+assumed. `lib/vitalis-stack.ts` now supports three interchangeable follow-up
+call providers, picked at deploy time via CDK context (never guessed if more
+than one flag is set — see the `resolvedCallProvider` logic):
+
+- `-c enableConnectLex=true` — the original Connect+Lex path. **Unusable on
+  this account** (see above); kept in case the AISPL billing relationship is
+  ever migrated.
+- `-c enableChimeVoice=true` — Amazon Chime SDK Voice, AISPL-compatible.
+  Needs a custom resource (`lambda/chime-sma-provisioner`) since this
+  aws-cdk-lib version has no native `AWS::ChimeSDKVoice::*` CloudFormation
+  support.
+- `-c enableTwilioVoice=true -c twilioAccountSid=... -c twilioAuthToken=...
+  -c twilioPhoneNumber=... -c geminiApiKey=...` — Twilio Voice + Gemini
+  (`lambda/twilio-voice`), fully independent of Connect/Lex/Chime. **This is
+  the provider currently deployed** — see "Deployment status" below.
+
+Also added since that session: digital (non-PDF) prescription issuance with
+Polly read-aloud and Translate, doctor/patient prescription-list routes, and
+a Lex `FallbackIntent` fix required for the bot's CloudFormation import to
+succeed at all (undocumented Lex V2 requirement, found via a real deploy
+failure).
 
 ## Known gaps (raised with the user, deliberately not fixed this pass)
 
@@ -93,14 +125,48 @@ configured by Claude — deployment is entirely the user's action to take.
   caller can view/cancel any appointment by ID. Not exploitable via the
   frontend today (it never exposes another user's appointment ID), but worth
   fixing before wider access. Listed in README's "Next steps".
+- Hard navigation to any non-root route (typing the URL, refreshing mid-route,
+  opening a shared/bookmarked link, e.g. `/login` or `/doctor/appointments`)
+  404s on both hosting paths — confirmed on the live S3-website fallback, and
+  it would affect the CloudFront+OAC path too since OAC talks to S3's REST
+  API, which (unlike the S3 website endpoint) does no per-directory
+  index-document resolution; there's no CloudFront Function/Lambda@Edge doing
+  that rewrite. Normal in-app usage is unaffected: Next's client router
+  navigates via prefetched `<route>.txt` RSC-payload files (real objects,
+  fetched by exact name), not via the server resolving the path. Not fixed
+  since it wasn't blocking the deploy — worth a CloudFront Function
+  (`uri.replace` to append `.html`/`index.html`) once CloudFront is available.
 
-## Deployment (not yet done)
+## Deployment status
 
-See the root [README.md](README.md) "Setup" section and
-[frontend/README.md](frontend/README.md) "Build order" for exact commands.
-Short version: `aws configure` → `npx cdk bootstrap` → `npx cdk deploy
-VitalisStack` → fill `frontend/.env.production` from its outputs → `cd
-frontend && npm run build` → `npx cdk deploy VitalisFrontendStack`.
+**Both stacks are live in `us-east-1`, account `401528908325`** (deployed by
+Claude Code with the user's AWS root-account credentials, logged in via
+`aws login` — a custom wrapper around AWS CLI v2, not a standard `aws sso
+login`/IAM setup).
+
+- `VitalisStack`: deployed with `-c enableTwilioVoice=true` plus the four
+  Twilio/Gemini context values (given by the user directly in chat — not
+  stored anywhere in this repo; re-supply them for any future deploy that
+  needs to keep Twilio calling enabled, or CDK will plan to remove those
+  resources).
+- `VitalisFrontendStack`: deployed with `-c enableS3WebsiteFallback=true`
+  (see the Architecture section above) since CloudFront is blocked pending
+  AWS Support verification. `SiteUrl` output is the S3 static-website
+  endpoint (plain HTTP, no HTTPS) — check the live stack output for the
+  current URL rather than trusting any URL written in chat history, since
+  redeploying can change the bucket's physical name.
+- **Follow-up action for the user**: open an AWS Support case referencing
+  the CloudFront `AccessDenied`/"account must be verified" error to lift the
+  hold, then redeploy `VitalisFrontendStack` *without*
+  `-c enableS3WebsiteFallback` to switch to the intended CloudFront+HTTPS
+  setup (same `frontend/out` contents, just a different front door — no
+  rebuild needed, just a plain `cdk deploy`).
+- CDK asset-publish/deploy roles (`cdk-hnb659fds-*`) can't be assumed by
+  these credentials ("current credentials could not be used to assume
+  [role]... proceeding anyway") — non-fatal, CDK falls back to the
+  root-account credentials directly, but it's a sign this account's CDK
+  bootstrap trust policy is nonstandard. Ignore the warning unless a deploy
+  actually fails on a permissions error.
 
 ## Plan file from this session
 

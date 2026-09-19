@@ -24,6 +24,40 @@ export class VitalisFrontendStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
 
+    // CloudFront is the documented, intended path (HTTPS, OAC-fronted private
+    // bucket) — this flag is opt-IN to the degraded fallback, not the other
+    // way round. It exists only because an actual deploy attempt on this AWS
+    // account failed with:
+    //   "Your account must be verified before you can add new CloudFront
+    //    resources. To verify your account, please contact AWS Support."
+    // — a new-account fraud-prevention hold that AWS Support has to lift;
+    // there's no code-side fix for it. Deploy with `-c
+    // enableS3WebsiteFallback=true` to serve the same `frontend/out` straight
+    // off an S3 static website endpoint (plain HTTP, no OAC/CloudFront) in
+    // the meantime. Drop the flag once the account is verified and redeploy
+    // to switch back — the bucket contents don't change, only the front door.
+    const enableS3WebsiteFallback = this.node.tryGetContext("enableS3WebsiteFallback") === true
+      || this.node.tryGetContext("enableS3WebsiteFallback") === "true";
+
+    if (enableS3WebsiteFallback) {
+      const websiteBucket = new s3.Bucket(this, "VitalisSiteBucket", {
+        removalPolicy: RemovalPolicy.DESTROY,
+        autoDeleteObjects: true,
+        publicReadAccess: true,
+        blockPublicAccess: s3.BlockPublicAccess.BLOCK_ACLS,
+        websiteIndexDocument: "index.html",
+        websiteErrorDocument: "404.html",
+      });
+
+      new s3deploy.BucketDeployment(this, "VitalisSiteDeployment", {
+        sources: [s3deploy.Source.asset(path.join(__dirname, "..", "frontend", "out"))],
+        destinationBucket: websiteBucket,
+      });
+
+      new cdk.CfnOutput(this, "SiteUrl", { value: websiteBucket.bucketWebsiteUrl });
+      return;
+    }
+
     const siteBucket = new s3.Bucket(this, "VitalisSiteBucket", {
       removalPolicy: RemovalPolicy.DESTROY,
       autoDeleteObjects: true,

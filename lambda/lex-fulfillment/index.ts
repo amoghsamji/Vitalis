@@ -1,7 +1,7 @@
 import { LambdaClient, InvokeCommand } from "@aws-sdk/client-lambda";
 import { GetCommand } from "@aws-sdk/lib-dynamodb";
 import { ddb, TABLE_NAME } from "../_shared/ddb";
-import { recordCallEvent } from "../_shared/callAudit";
+import { recordCallEvent, updateCallStatus } from "../_shared/callAudit";
 import { mapIntentToDirective, type IntentName, type ScriptSessionState } from "./script";
 
 const lambdaClient = new LambdaClient({});
@@ -80,7 +80,13 @@ export const handler = async (lexEvent: any) => {
 
   // Emergency / decline / fine / transfer-then-end all close the dialog.
   if (directive.endCall) {
-    if (followUpCallId) await recordCallEvent(followUpCallId, "ended", { finalIntent: intentName });
+    if (followUpCallId) {
+      await recordCallEvent(followUpCallId, "ended", { finalIntent: intentName });
+      // Populates the same queryable `outcome` field the Twilio provider sets
+      // (see lambda/_shared/callAudit.ts), so the doctor's call-history list
+      // shows a real outcome for Connect/Chime calls too, not just Twilio's.
+      await updateCallStatus(followUpCallId, "ended", { outcome: outcomeForIntent(intentName) });
+    }
     return closeResponse(lexEvent, directive.message, newSessionAttrs);
   }
 
@@ -134,4 +140,26 @@ function elicitResponse(lexEvent: any, message: string, sessionAttributes: Recor
     },
     messages: [{ contentType: "PlainText", content: message }],
   };
+}
+
+/**
+ * Maps the Lex intent a call actually ended on to the same coarse `outcome`
+ * vocabulary lambda/twilio-voice uses, so the doctor-facing call-history list
+ * (lambda/follow-up-calls' list mode) reads consistently across providers.
+ * ScheduleFollowUp/ProblemPersists never reach this — they don't end the
+ * call themselves (see the offer_slots branch above) — so a call that goes
+ * on to book an appointment doesn't get an outcome set here; that's a known
+ * gap, not something this touch attempts to close.
+ */
+function outcomeForIntent(intentName: IntentName): string {
+  switch (intentName) {
+    case "PatientIsFine":
+      return "FINE";
+    case "DeclineFollowUp":
+      return "PERSISTING";
+    case "EmergencySymptoms":
+      return "WORSENING";
+    default:
+      return "UNKNOWN";
+  }
 }

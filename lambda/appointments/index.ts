@@ -1,4 +1,11 @@
-import { PutCommand, GetCommand, UpdateCommand, QueryCommand } from "@aws-sdk/lib-dynamodb";
+import {
+  PutCommand,
+  GetCommand,
+  UpdateCommand,
+  QueryCommand,
+  BatchGetCommand,
+  ScanCommand,
+} from "@aws-sdk/lib-dynamodb";
 import { ConditionalCheckFailedException } from "@aws-sdk/client-dynamodb";
 import { EventBridgeClient, PutEventsCommand } from "@aws-sdk/client-eventbridge";
 import { ddb, TABLE_NAME, jsonResponse, getClaims } from "../_shared/ddb";
@@ -49,7 +56,27 @@ export const handler = async (event: any) => {
         ExpressionAttributeValues: { ":pk": `DOCTOR_APPTS#${doctorId}` },
       })
     );
-    return jsonResponse(200, { appointments: result.Items || [] });
+    // GSI1 only holds the DOCTOR_INDEX pointer items ({ apptId } + keys) for
+    // this partition — the patient partition is keyed off the DETAILS item
+    // itself, but a doctor's isn't, since one item can only carry one GSI1PK.
+    // So hydrate the real DETAILS records rather than returning the pointers,
+    // which have no status/startTime/patientId at all.
+    const apptIds = (result.Items || [])
+      .map((item) => item.apptId ?? String(item.PK || "").replace(/^APPT#/, ""))
+      .filter(Boolean);
+    let appointments = await getAppointmentsByIds(apptIds);
+
+    // Fallback: the DOCTOR_INDEX pointer is only written at booking time, so
+    // appointments booked before that write existed have no GSI1 entry and
+    // would be invisible to their doctor forever. Fall back to a scan (the
+    // same approach GET /doctors already takes at this data size) and backfill
+    // the missing pointers so the next request is a plain Query again.
+    if (appointments.length === 0) {
+      appointments = await scanAppointmentsForDoctor(doctorId);
+      await backfillDoctorIndex(appointments);
+    }
+
+    return jsonResponse(200, { appointments });
   }
 
   if (method === "POST" && path === "/appointments") {
@@ -222,3 +249,83 @@ export const handler = async (event: any) => {
 
   return jsonResponse(405, { message: "Method not allowed" });
 };
+
+/**
+ * BatchGet the APPT#<id>/DETAILS items for a list of appointment ids, in
+ * chunks of 25 (BatchGetItem's per-request cap is 100 keys, but chunking
+ * smaller keeps each response well inside the 16MB limit so UnprocessedKeys
+ * stays empty in practice; it's retried below regardless).
+ */
+async function getAppointmentsByIds(apptIds: string[]) {
+  const unique = Array.from(new Set(apptIds));
+  const appointments: Record<string, any>[] = [];
+
+  for (let i = 0; i < unique.length; i += 25) {
+    let keys = unique.slice(i, i + 25).map((id) => ({ PK: `APPT#${id}`, SK: "DETAILS" }));
+    // UnprocessedKeys is a normal (throttling) outcome, not an error — loop
+    // until the chunk is fully drained.
+    while (keys.length > 0) {
+      const res: any = await ddb.send(
+        new BatchGetCommand({ RequestItems: { [TABLE_NAME]: { Keys: keys } } })
+      );
+      appointments.push(...((res.Responses?.[TABLE_NAME] as Record<string, any>[]) || []));
+      keys = res.UnprocessedKeys?.[TABLE_NAME]?.Keys || [];
+    }
+  }
+
+  return appointments;
+}
+
+/** Paginated scan for the DETAILS items of APPT# records belonging to one doctor. */
+async function scanAppointmentsForDoctor(doctorId: string) {
+  const appointments: Record<string, any>[] = [];
+  let lastKey: Record<string, any> | undefined;
+
+  do {
+    const res: any = await ddb.send(
+      new ScanCommand({
+        TableName: TABLE_NAME,
+        FilterExpression: "SK = :details AND doctorId = :doctorId",
+        ExpressionAttributeValues: { ":details": "DETAILS", ":doctorId": doctorId },
+        ExclusiveStartKey: lastKey,
+      })
+    );
+    appointments.push(
+      ...((res.Items as Record<string, any>[]) || []).filter((i) => String(i.PK || "").startsWith("APPT#"))
+    );
+    lastKey = res.LastEvaluatedKey;
+  } while (lastKey);
+
+  return appointments;
+}
+
+/**
+ * Write the missing DOCTOR_INDEX pointers for appointments found by scan.
+ * attribute_not_exists(PK) keeps this a no-op for pointers that already
+ * exist, and a failure here is non-fatal — the scan already produced the
+ * response, so a backfill error must not turn a working read into a 500.
+ */
+async function backfillDoctorIndex(appointments: Record<string, any>[]) {
+  await Promise.all(
+    appointments.map(async (appt) => {
+      try {
+        await ddb.send(
+          new PutCommand({
+            TableName: TABLE_NAME,
+            Item: {
+              PK: `APPT#${appt.id}`,
+              SK: "DOCTOR_INDEX",
+              GSI1PK: `DOCTOR_APPTS#${appt.doctorId}`,
+              GSI1SK: appt.startTime,
+              apptId: appt.id,
+            },
+            ConditionExpression: "attribute_not_exists(PK)",
+          })
+        );
+      } catch {
+        // Already present, or a transient write failure — either way the
+        // response is unaffected and the next request will retry.
+      }
+    })
+  );
+}

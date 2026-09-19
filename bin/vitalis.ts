@@ -6,13 +6,16 @@ import { VitalisFrontendStack } from "../lib/frontend-stack";
 
 const app = new cdk.App();
 
+// Region is pinned to the project, not to whoever's shell is running the
+// deploy: the CDK CLI always sets CDK_DEFAULT_REGION from the caller's AWS
+// CLI default, so reading it here silently sends the stacks to whatever
+// region that happens to be. Override deliberately with CDK_DEPLOY_REGION.
 const env = {
   account: process.env.CDK_DEFAULT_ACCOUNT,
-  region: process.env.CDK_DEFAULT_REGION || "us-east-1",
+  region: process.env.CDK_DEPLOY_REGION || "us-east-1",
 };
 
 new VitalisStack(app, "VitalisStack", {
-  // Fill in your account/region, or rely on the AWS_PROFILE / AWS_REGION env vars.
   env,
   description: "Vitalis - AWS-native healthcare workflow automation platform",
 });

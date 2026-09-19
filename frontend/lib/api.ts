@@ -8,7 +8,9 @@ import type {
   Medication,
   Patient,
   Prescription,
+  PrescriptionMedicationItem,
   Slot,
+  TranslatedPrescription,
   Workflow,
   WorkflowRun,
 } from "./types";
@@ -110,6 +112,29 @@ export const api = {
     request<{ prescriptions: Prescription[] }>(`/prescriptions?appointmentId=${encodeURIComponent(params.appointmentId)}`, {
       token,
     }),
+  issuePrescription: (
+    body: { appointmentId: string; diagnosis?: string; notes?: string; medications: PrescriptionMedicationItem[] },
+    token: string
+  ) => request<Prescription>(`/prescriptions`, { method: "POST", body, token }),
+  getPrescription: (id: string, token: string) => request<Prescription>(`/prescriptions/${id}`, { token }),
+  getPrescriptionDownloadUrl: (id: string, token: string) =>
+    request<{ downloadUrl: string }>(`/prescriptions/${id}/download`, { token }),
+  getPrescriptionAudio: (id: string, languageCode: string, token: string) =>
+    request<{ audioUrl: string; languageCode: string }>(`/prescriptions/${id}/audio`, {
+      method: "POST",
+      body: { languageCode },
+      token,
+    }),
+  translatePrescription: (id: string, targetLanguage: string, token: string) =>
+    request<TranslatedPrescription>(`/prescriptions/${id}/translate`, {
+      method: "POST",
+      body: { targetLanguage },
+      token,
+    }),
+  listPatientPrescriptions: (patientId: string, token: string) =>
+    request<{ prescriptions: Prescription[] }>(`/patients/${patientId}/prescriptions`, { token }),
+  listDoctorPrescriptions: (doctorId: string, token: string) =>
+    request<{ prescriptions: Prescription[] }>(`/doctors/${doctorId}/prescriptions`, { token }),
 
   // Uploads
   getUploadUrl: (fileName: string, contentType: string, token: string) =>
@@ -139,6 +164,7 @@ export const api = {
       `/follow-up-calls?appointmentId=${encodeURIComponent(appointmentId)}`,
       { token }
     ),
+  listFollowUpCalls: (token: string) => request<{ calls: FollowUpCall[] }>(`/follow-up-calls`, { token }),
   listDoctorNotifications: (doctorId: string, token: string) =>
     request<{ notifications: DoctorNotification[] }>(`/doctors/${doctorId}/notifications`, { token }),
 

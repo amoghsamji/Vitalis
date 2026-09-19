@@ -16,6 +16,7 @@ import * as iam from "aws-cdk-lib/aws-iam";
 import * as logs from "aws-cdk-lib/aws-logs";
 import * as connect from "aws-cdk-lib/aws-connect";
 import * as lex from "aws-cdk-lib/aws-lex";
+import * as cr from "aws-cdk-lib/custom-resources";
 import { RemovalPolicy, Duration } from "aws-cdk-lib";
 import * as path from "path";
 
@@ -142,9 +143,18 @@ export class VitalisStack extends cdk.Stack {
     //   WORKFLOW#<id>            / DEFINITION              -> workflow graph JSON
     //   WORKFLOW#<id>            / RUN#<runId>             -> execution/audit log
     //   NOTIFICATION#<id>        / DETAILS
-    //   PRESCRIPTION#<id>        / DETAILS                 -> prescription record (GSI1PK
+    //   PRESCRIPTION#<id>        / DETAILS                 -> prescription record, either
+    //                                                          type "pdf" (doctor-uploaded scan) or
+    //                                                          "digital" (structured diagnosis/notes/
+    //                                                          medications issued directly). GSI1PK
     //                                                          APPT_PRESCRIPTION#<appointmentId> for
-    //                                                          appointment-scoped lookup)
+    //                                                          appointment-scoped lookup either way.
+    //   PRESCRIPTION#<id>        / PATIENT_INDEX            -> pointer item, GSI1PK
+    //                                                          PATIENT_PRESCRIPTIONS#<patientId>, for
+    //                                                          a patient's full prescription list
+    //   PRESCRIPTION#<id>        / DOCTOR_INDEX             -> pointer item, GSI1PK
+    //                                                          DOCTOR_PRESCRIPTIONS#<doctorId>, for
+    //                                                          a doctor's issued-prescription list
     //   APPT#<id>                / EVENT_MARKER#prescription_uploaded -> idempotency marker,
     //                                                          written once via a conditional
     //                                                          PutCommand so the "prescription_uploaded"
@@ -244,8 +254,17 @@ export class VitalisStack extends cdk.Stack {
     }
     pdfBucket.grantRead(pdfIntakeFn);
     pdfBucket.grantPut(uploadsFn);
-    pdfBucket.grantPut(prescriptionsFn);
+    pdfBucket.grantReadWrite(prescriptionsFn);
     workflowBus.grantPutEventsTo(prescriptionsFn);
+    // Digital-prescription features: Amazon Polly reads a prescription aloud
+    // (optionally translated first), Amazon Translate renders it in another
+    // language. Neither action supports resource-level ARN scoping in IAM.
+    prescriptionsFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["polly:SynthesizeSpeech", "translate:TranslateText"],
+        resources: ["*"],
+      })
+    );
     pdfIntakeFn.addToRolePolicy(
       new iam.PolicyStatement({
         actions: ["textract:AnalyzeDocument", "textract:DetectDocumentText"],
@@ -291,15 +310,26 @@ export class VitalisStack extends cdk.Stack {
     });
 
     // ---------------------------------------------------------------------
-    // 5b. AUTOMATED FOLLOW-UP CALLS — Amazon Connect + Lex V2
+    // 5b. AUTOMATED FOLLOW-UP CALLS — Amazon Connect + Lex V2, Amazon Chime
+    //     SDK Voice + Lex V2, or Twilio Voice + Gemini (three interchangeable
+    //     providers selected at deploy time — see CALL_PROVIDER below)
     // ---------------------------------------------------------------------
     // New DynamoDB item shapes used only by this feature (same single table):
     //   FOLLOWUP_CALL#<id>  / DETAILS          -> call record (status, ids, GSI1PK
     //                                              APPT_FOLLOWUP#<appointmentId> for
-    //                                              one-active-call-per-appointment lookup)
+    //                                              one-active-call-per-appointment lookup).
+    //                                              Twilio-only fields: provider,
+    //                                              twilioCallSid, conversationState,
+    //                                              offeredSlots, outcome, answeredAt,
+    //                                              endedAt, duration (see
+    //                                              lambda/twilio-voice and the small
+    //                                              extension in lambda/_shared/callAudit.ts)
     //   FOLLOWUP_CALL#<id>  / EVENT#<ts>#<name> -> append-only audit trail (see
     //                                              lambda/_shared/callAudit.ts for the
     //                                              exact allowed event names)
+    //   FOLLOWUP_CALL#<id>  / DOCTOR_INDEX      -> pointer item, GSI1PK
+    //                                              DOCTOR_FOLLOWUPS#<doctorId>, for a
+    //                                              doctor's full call-history list
     //   NOTIFICATION#<id>   / DETAILS          -> reused for doctor in-app notifications,
     //                                              with GSI1PK DOCTOR_NOTIFICATIONS#<doctorId>
     //
@@ -373,27 +403,65 @@ export class VitalisStack extends cdk.Stack {
     const enableConnectLex = this.node.tryGetContext("enableConnectLex") === true
       || this.node.tryGetContext("enableConnectLex") === "true";
 
-    if (enableConnectLex) {
     // ---------------------------------------------------------------------
-    // Amazon Connect instance — CloudFormation-supported (CfnInstance).
-    // IDENTITY_MANAGEMENT_TYPE=CONNECT_MANAGED needs no directory. Only the
-    // "contactflows" and "inbound/outbound calls" attributes are needed for
-    // this feature; the rest default off to avoid provisioning cost.
+    // Amazon Chime SDK Voice is a second, independent way to place the
+    // follow-up call, alongside Connect above. It exists because this AWS
+    // account is billed through AISPL (the India-billed reseller entity),
+    // and AISPL accounts are blocked from creating Amazon Connect instances
+    // entirely, in every region, until the account's billing relationship is
+    // migrated to a standard AWS Inc. account — confirmed by an actual
+    // deploy attempt, not assumed:
+    //   "You're signed in with an AWS account that was provided by AISPL.
+    //    These accounts cannot create Amazon Connect instances."
+    // Deploy with `-c enableChimeVoice=true` to use this path instead of (or
+    // alongside) `-c enableConnectLex=true`. Both share the same Lex bot
+    // below — the follow-up conversation script (lambda/lex-fulfillment)
+    // doesn't know or care which telephony service started it.
     // ---------------------------------------------------------------------
-    const connectInstance = new connect.CfnInstance(this, "VitalisConnectInstance", {
-      identityManagementType: "CONNECT_MANAGED",
-      instanceAlias: `vitalis-${this.account}-${this.region}`,
-      attributes: {
-        inboundCalls: true,
-        outboundCalls: true,
-        contactflowLogs: true,
-      },
-    });
+    const enableChimeVoice = this.node.tryGetContext("enableChimeVoice") === true
+      || this.node.tryGetContext("enableChimeVoice") === "true";
 
-    fetchPatientContextFn.addPermission("AllowConnectInvoke", {
-      principal: new iam.ServicePrincipal("connect.amazonaws.com"),
-      sourceArn: connectInstance.attrArn,
-    });
+    // ---------------------------------------------------------------------
+    // Twilio Voice + Gemini is a THIRD, fully independent way to place the
+    // follow-up call — it needs none of the Lex bot / Connect instance /
+    // Chime SMA plumbing above (see the standalone block further down, after
+    // httpApi exists). It sidesteps the AISPL/Connect billing block via a
+    // completely different mechanism: Twilio doesn't care what kind of AWS
+    // account is behind it. Deploy with `-c enableTwilioVoice=true
+    // -c twilioAccountSid=... -c twilioAuthToken=... -c twilioPhoneNumber=...
+    // -c geminiApiKey=...` (same "CDK context, not Secrets Manager" pattern
+    // already used for Google OAuth's client id/secret above).
+    // ---------------------------------------------------------------------
+    const enableTwilioVoice = this.node.tryGetContext("enableTwilioVoice") === true
+      || this.node.tryGetContext("enableTwilioVoice") === "true";
+    const twilioAccountSid = this.node.tryGetContext("twilioAccountSid") as string | undefined;
+    const twilioAuthToken = this.node.tryGetContext("twilioAuthToken") as string | undefined;
+    const twilioPhoneNumber = this.node.tryGetContext("twilioPhoneNumber") as string | undefined;
+    const geminiApiKey = this.node.tryGetContext("geminiApiKey") as string | undefined;
+    if (enableTwilioVoice && !(twilioAccountSid && twilioAuthToken && twilioPhoneNumber && geminiApiKey)) {
+      throw new Error(
+        "enableTwilioVoice needs twilioAccountSid, twilioAuthToken, twilioPhoneNumber, and geminiApiKey CDK context values."
+      );
+    }
+
+    // Which provider outboundCallInitiatorFn actually dials with, when more
+    // than one is enabled at once. An explicit `-c callProvider=...` picks;
+    // otherwise exactly one enabled provider is required — never guessed.
+    const enabledCallProviders = [
+      enableConnectLex && "connect",
+      enableChimeVoice && "chime",
+      enableTwilioVoice && "twilio",
+    ].filter((p): p is string => Boolean(p));
+    const callProviderOverride = this.node.tryGetContext("callProvider") as string | undefined;
+    if (callProviderOverride && !enabledCallProviders.includes(callProviderOverride)) {
+      throw new Error(`callProvider=${callProviderOverride} isn't one of the enabled providers: ${enabledCallProviders.join(", ") || "(none)"}`);
+    }
+    if (!callProviderOverride && enabledCallProviders.length > 1) {
+      throw new Error(
+        `Multiple call providers enabled (${enabledCallProviders.join(", ")}) — pass -c callProvider=connect|chime|twilio to pick one.`
+      );
+    }
+    const resolvedCallProvider = callProviderOverride ?? enabledCallProviders[0];
 
     // ---------------------------------------------------------------------
     // Lex V2 bot — CfnBot (module is aws-cdk-lib/aws-lex; despite the name,
@@ -404,7 +472,12 @@ export class VitalisStack extends cdk.Stack {
     // built-in AMAZON.FallbackIntent, configured rather than declared, since
     // Lex V2 auto-provisions it for every bot locale and CfnBot's `intents`
     // array is for custom intents only.
+    //
+    // Shared by both telephony backends (hence gated on either flag, not
+    // just enableConnectLex) — this bot and lexFulfillmentFn are the entire
+    // conversation; only how a call reaches them differs.
     // ---------------------------------------------------------------------
+    if (enableConnectLex || enableChimeVoice) {
     const lexRole = new iam.Role(this, "VitalisLexBotRole", {
       assumedBy: new iam.ServicePrincipal("lexv2.amazonaws.com"),
     });
@@ -416,6 +489,16 @@ export class VitalisStack extends cdk.Stack {
     );
 
     const utterances = (...texts: string[]) => texts.map((utterance) => ({ utterance }));
+    // Every intent below routes to lexFulfillmentFn for both dialog
+    // management and fulfillment (matches that Lambda's own doc comment —
+    // "Lex V2 code-hook Lambda (DialogCodeHook + FulfillmentCodeHook)" — which
+    // the intent definitions never actually set until this fix; without it,
+    // the alias-level codeHookSpecification below only *authorizes* the
+    // Lambda, it doesn't route any specific intent's turns to it).
+    const codeHooks = {
+      dialogCodeHook: { enabled: true },
+      fulfillmentCodeHook: { enabled: true },
+    };
 
     const followUpBot = new lex.CfnBot(this, "VitalisFollowUpBot", {
       name: "vitalis-follow-up-call-bot",
@@ -437,6 +520,7 @@ export class VitalisStack extends cdk.Stack {
             {
               name: "PatientIsFine",
               sampleUtterances: utterances("I'm fine", "I'm feeling better", "No problems", "All good", "Feeling great"),
+              ...codeHooks,
             },
             {
               name: "ProblemPersists",
@@ -447,14 +531,17 @@ export class VitalisStack extends cdk.Stack {
                 "Still having symptoms",
                 "It hasn't gone away"
               ),
+              ...codeHooks,
             },
             {
               name: "ScheduleFollowUp",
               sampleUtterances: utterances("Yes please", "Yes schedule it", "That would help", "Book an appointment", "Yes"),
+              ...codeHooks,
             },
             {
               name: "DeclineFollowUp",
               sampleUtterances: utterances("No thanks", "Not right now", "No", "I'll contact the clinic myself"),
+              ...codeHooks,
             },
             {
               name: "EmergencySymptoms",
@@ -465,15 +552,25 @@ export class VitalisStack extends cdk.Stack {
                 "I think I need an ambulance",
                 "I'm bleeding a lot"
               ),
+              ...codeHooks,
+            },
+            // Lex V2's CloudFormation import (unlike the console/API bot-build
+            // flow) requires every locale to explicitly declare its fallback
+            // intent — omitting it fails the whole bot import with "Locale
+            // 'en_US' ... doesn't contain a fallback intent" (confirmed via a
+            // real deploy attempt, not assumed). No sampleUtterances: Lex
+            // reserves AMAZON.FallbackIntent as the catch-all for anything
+            // that doesn't match another intent, so it can't declare its own.
+            {
+              name: "FallbackIntent",
+              parentIntentSignature: "AMAZON.FallbackIntent",
+              ...codeHooks,
             },
           ],
         },
       ],
       // Used for console "Test bot" only. Production traffic uses the
-      // published BotAlias below, which is what the Connect contact flow
-      // should reference (see the manual step in README.md — associating
-      // that alias with the Connect instance is a connect:AssociateBot API
-      // call CloudFormation has no L1 resource for).
+      // published BotAlias below.
       testBotAliasSettings: {
         botAliasLocaleSettings: [
           {
@@ -531,6 +628,31 @@ export class VitalisStack extends cdk.Stack {
       sourceArn: followUpBotAlias.attrArn,
     });
 
+    new cdk.CfnOutput(this, "LexFollowUpBotId", { value: followUpBot.attrId });
+    new cdk.CfnOutput(this, "LexFollowUpBotAliasId", { value: followUpBotAlias.attrBotAliasId });
+
+    // -----------------------------------------------------------------
+    // Amazon Connect instance — CfnInstance. Kept behind its own flag
+    // (rather than deleted) in case this account's AISPL billing is ever
+    // migrated: at that point `-c enableConnectLex=true` alone brings this
+    // path back with no code changes.
+    // -----------------------------------------------------------------
+    if (enableConnectLex) {
+    const connectInstance = new connect.CfnInstance(this, "VitalisConnectInstance", {
+      identityManagementType: "CONNECT_MANAGED",
+      instanceAlias: `vitalis-${this.account}-${this.region}`,
+      attributes: {
+        inboundCalls: true,
+        outboundCalls: true,
+        contactflowLogs: true,
+      },
+    });
+
+    fetchPatientContextFn.addPermission("AllowConnectInvoke", {
+      principal: new iam.ServicePrincipal("connect.amazonaws.com"),
+      sourceArn: connectInstance.attrArn,
+    });
+
     // ---------------------------------------------------------------------
     // Contact flow — CfnContactFlow DOES support content-as-code (confirmed:
     // the `content` prop is a plain string of Connect Flow Language JSON).
@@ -544,7 +666,11 @@ export class VitalisStack extends cdk.Stack {
     // hand-authoring that block's JSON blind (vs. exporting it from the
     // visual designer after the association exists) risks shipping a flow
     // that LOOKS complete but silently fails at runtime — so it's called
-    // out as a manual console edit instead of guessed at here.
+    // out as a manual console edit instead of guessed at here. (This gap is
+    // exactly what the enableChimeVoice path below closes: Chime's
+    // StartBotConversation action references the bot alias directly from
+    // Lambda-returned call-control actions, with no separate association
+    // resource needed.)
     // ---------------------------------------------------------------------
     const contactFlowContent = {
       Version: "2019-10-30",
@@ -572,15 +698,137 @@ export class VitalisStack extends cdk.Stack {
       content: JSON.stringify(contactFlowContent),
     });
 
+    if (resolvedCallProvider === "connect") outboundCallInitiatorFn.addEnvironment("CALL_PROVIDER", "connect");
     outboundCallInitiatorFn.addEnvironment("CONNECT_INSTANCE_ID", connectInstance.attrId);
     outboundCallInitiatorFn.addEnvironment("CONNECT_CONTACT_FLOW_ID", contactFlow.attrContactFlowArn);
+
+    // Outbound calls need a source number, and claiming one is a real,
+    // recurring monthly charge (unlike everything else in this stack) — so
+    // CDK never claims it automatically. Claim it yourself (AWS Console:
+    // Connect > Phone numbers, or `aws connect claim-phone-number`) and pass
+    // it in explicitly with `-c connectSourcePhoneNumber=+1XXXXXXXXXX`; until
+    // then this stays unset and calls fail fast with a clear Connect error
+    // instead of a surprise line item.
+    const connectSourcePhoneNumber = this.node.tryGetContext("connectSourcePhoneNumber");
+    if (connectSourcePhoneNumber) {
+      outboundCallInitiatorFn.addEnvironment("CONNECT_SOURCE_PHONE_NUMBER", connectSourcePhoneNumber);
+    }
 
     new cdk.CfnOutput(this, "ConnectInstanceId", { value: connectInstance.attrId });
     new cdk.CfnOutput(this, "ConnectInstanceArn", { value: connectInstance.attrArn });
     new cdk.CfnOutput(this, "FollowUpContactFlowArn", { value: contactFlow.attrContactFlowArn });
-    new cdk.CfnOutput(this, "LexFollowUpBotId", { value: followUpBot.attrId });
-    new cdk.CfnOutput(this, "LexFollowUpBotAliasId", { value: followUpBotAlias.attrBotAliasId });
     } // end if (enableConnectLex)
+
+    // -----------------------------------------------------------------
+    // Amazon Chime SDK Voice (PSTN Audio) — the AISPL-compatible path.
+    //
+    // Chime SDK Voice's outbound-calling resources (SIP media applications)
+    // have NO native CloudFormation resource type in this aws-cdk-lib
+    // version — confirmed empirically against the installed package (no
+    // AWS::ChimeSDKVoice::* type exists anywhere in it, unlike Connect and
+    // Lex which are both natively supported above). A small purpose-built
+    // custom resource (lambda/chime-sma-provisioner) fills that one gap;
+    // everything else here is native CDK/IAM.
+    // -----------------------------------------------------------------
+    if (enableChimeVoice) {
+    const chimeSmaHandlerFn = makeFn("ChimeSmaHandlerFn", "chime-sma-handler/index.ts", {
+      FETCH_PATIENT_CONTEXT_FN_NAME: fetchPatientContextFn.functionName,
+      LEX_BOT_ALIAS_ARN: followUpBotAlias.attrArn,
+    });
+    table.grantReadWriteData(chimeSmaHandlerFn);
+    fetchPatientContextFn.grantInvoke(chimeSmaHandlerFn);
+
+    // Chime SDK Voice needs permission to invoke this Lambda for every call
+    // state change. sourceAccount-only (no sourceArn) is deliberate: scoping
+    // to the SIP media application's ARN would create a dependency cycle
+    // identical to the Connect/Cognito ones noted elsewhere in this file —
+    // the SMA (created just below) needs this Lambda's ARN to exist first.
+    chimeSmaHandlerFn.addPermission("AllowChimeVoiceInvoke", {
+      principal: new iam.ServicePrincipal("voiceconnector.chime.amazonaws.com"),
+      sourceAccount: this.account,
+    });
+
+    const chimeSmaProvisionerFn = makeFn("ChimeSmaProvisionerFn", "chime-sma-provisioner/index.ts");
+    chimeSmaProvisionerFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        // Resources are "*" because the SIP media application doesn't exist
+        // yet at policy-grant time (same chicken-and-egg reasoning as every
+        // other "*" resource statement in this file) and because Chime SDK
+        // Voice's create/update/delete actions for this resource type don't
+        // support resource-level ARN scoping in IAM.
+        // The IAM action namespace for this service is "chime:", not
+        // "chime-sdk-voice:" (the SDK package/client name) — confirmed by an
+        // actual AccessDenied error naming the action exactly, not assumed.
+        actions: [
+          "chime:CreateSipMediaApplication",
+          "chime:UpdateSipMediaApplication",
+          "chime:DeleteSipMediaApplication",
+        ],
+        resources: ["*"],
+      })
+    );
+
+    const chimeSmaProvider = new cr.Provider(this, "ChimeSmaProvider", {
+      onEventHandler: chimeSmaProvisionerFn,
+    });
+
+    const chimeSma = new cdk.CustomResource(this, "ChimeSmaResource", {
+      serviceToken: chimeSmaProvider.serviceToken,
+      properties: {
+        Region: this.region,
+        Name: "vitalis-follow-up-sma",
+        LambdaArn: chimeSmaHandlerFn.functionArn,
+      },
+    });
+
+    // Chime SDK Voice needs explicit permission to start a conversation with
+    // this Lex bot alias on the caller's behalf — the resource-policy
+    // equivalent of Connect's connect:AssociateBot, but natively
+    // CloudFormation-manageable via AWS::Lex::ResourcePolicy (no manual
+    // console step required, unlike the Connect path above).
+    new lex.CfnResourcePolicy(this, "VitalisFollowUpBotChimePolicy", {
+      resourceArn: followUpBotAlias.attrArn,
+      policy: {
+        Version: "2012-10-17",
+        Statement: [
+          {
+            Effect: "Allow",
+            Principal: { Service: "voiceconnector.chime.amazonaws.com" },
+            Action: "lex:StartConversation",
+            Resource: followUpBotAlias.attrArn,
+            Condition: {
+              StringEquals: { "AWS:SourceAccount": this.account },
+              ArnLike: { "AWS:SourceArn": chimeSma.getAttString("SipMediaApplicationArn") },
+            },
+          },
+        ],
+      },
+    });
+
+    if (resolvedCallProvider === "chime") outboundCallInitiatorFn.addEnvironment("CALL_PROVIDER", "chime");
+    outboundCallInitiatorFn.addEnvironment("CHIME_SIP_MEDIA_APPLICATION_ID", chimeSma.getAttString("SipMediaApplicationId"));
+    outboundCallInitiatorFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["chime:CreateSipMediaApplicationCall"],
+        resources: ["*"],
+      })
+    );
+
+    // Same real, recurring-monthly-charge situation as Connect's source
+    // number (see connectSourcePhoneNumber above) — CDK never claims this
+    // automatically. Claim one in the Chime SDK Voice console (or
+    // `aws chime-sdk-voice create-phone-number-order`) and pass it in with
+    // `-c chimeSourcePhoneNumber=+1XXXXXXXXXX`; until then this stays unset
+    // and calls fail fast with a clear Chime error instead of a surprise
+    // line item.
+    const chimeSourcePhoneNumber = this.node.tryGetContext("chimeSourcePhoneNumber");
+    if (chimeSourcePhoneNumber) {
+      outboundCallInitiatorFn.addEnvironment("CHIME_SOURCE_PHONE_NUMBER", chimeSourcePhoneNumber);
+    }
+
+    new cdk.CfnOutput(this, "ChimeSipMediaApplicationId", { value: chimeSma.getAttString("SipMediaApplicationId") });
+    } // end if (enableChimeVoice)
+    } // end if (enableConnectLex || enableChimeVoice)
 
     // ---------------------------------------------------------------------
     // 6. API GATEWAY — HTTP API, Cognito-authorized
@@ -620,6 +868,45 @@ export class VitalisStack extends cdk.Stack {
       });
     };
 
+    // ---------------------------------------------------------------------
+    // Twilio Voice + Gemini follow-up calls — structurally independent of
+    // the enableConnectLex/enableChimeVoice block above (no Lex bot/Connect
+    // instance/Chime SMA needed), but placed here rather than with them
+    // because it needs httpApi.apiEndpoint for its own webhook URLs.
+    // ---------------------------------------------------------------------
+    if (enableTwilioVoice) {
+      const twilioVoiceFn = makeFn("TwilioVoiceFn", "twilio-voice/index.ts", {
+        TWILIO_ACCOUNT_SID: twilioAccountSid as string,
+        TWILIO_AUTH_TOKEN: twilioAuthToken as string,
+        GEMINI_API_KEY: geminiApiKey as string,
+        PUBLIC_API_BASE_URL: httpApi.apiEndpoint,
+        NOTIFY_DOCTOR_FN_NAME: notifyDoctorFn.functionName,
+        GET_NEXT_SLOTS_FN_NAME: getNextSlotsFn.functionName,
+        RESERVE_SLOT_AND_SCHEDULE_FN_NAME: reserveSlotFn.functionName,
+        FETCH_PATIENT_CONTEXT_FN_NAME: fetchPatientContextFn.functionName,
+      });
+      table.grantReadWriteData(twilioVoiceFn);
+      notifyDoctorFn.grantInvoke(twilioVoiceFn);
+      getNextSlotsFn.grantInvoke(twilioVoiceFn);
+      reserveSlotFn.grantInvoke(twilioVoiceFn);
+      fetchPatientContextFn.grantInvoke(twilioVoiceFn);
+
+      // Twilio calls these directly — no Cognito JWT, so unauthenticated.
+      // Protected instead by X-Twilio-Signature validation inside the
+      // handler (see lambda/twilio-voice/index.ts).
+      addRoute("/follow-up-calls/twilio/answer", [apigwv2.HttpMethod.POST], twilioVoiceFn, false);
+      addRoute("/follow-up-calls/twilio/input", [apigwv2.HttpMethod.POST], twilioVoiceFn, false);
+      addRoute("/follow-up-calls/twilio/status", [apigwv2.HttpMethod.POST], twilioVoiceFn, false);
+
+      if (resolvedCallProvider === "twilio") {
+        outboundCallInitiatorFn.addEnvironment("CALL_PROVIDER", "twilio");
+        outboundCallInitiatorFn.addEnvironment("TWILIO_ACCOUNT_SID", twilioAccountSid as string);
+        outboundCallInitiatorFn.addEnvironment("TWILIO_AUTH_TOKEN", twilioAuthToken as string);
+        outboundCallInitiatorFn.addEnvironment("TWILIO_PHONE_NUMBER", twilioPhoneNumber as string);
+        outboundCallInitiatorFn.addEnvironment("PUBLIC_API_BASE_URL", httpApi.apiEndpoint);
+      }
+    }
+
     // Doctors + availability (public read for directory, auth for writes handled inside handler)
     addRoute("/doctors", [apigwv2.HttpMethod.GET], doctorsFn, false);
     addRoute("/doctors/{id}", [apigwv2.HttpMethod.GET], doctorsFn, false);
@@ -642,11 +929,20 @@ export class VitalisStack extends cdk.Stack {
     // Presigned S3 URL for browser-side lab PDF upload
     addRoute("/uploads/lab-pdf", [apigwv2.HttpMethod.POST], uploadsFn, true);
 
-    // Prescription upload (doctor-only presign/confirm) + read routes
+    // Prescriptions: PDF upload (doctor-only presign/confirm), digital issuance
+    // (structured diagnosis/notes/medications, no file), and read routes. Audio
+    // (Polly) and translate (Translate) are doctor- or patient-readable
+    // sub-actions on a single prescription; see lambda/prescriptions for the
+    // full route table and the "who can call what" auth rules.
     addRoute("/prescriptions/presign", [apigwv2.HttpMethod.POST], prescriptionsFn, true);
     addRoute("/prescriptions/confirm", [apigwv2.HttpMethod.POST], prescriptionsFn, true);
-    addRoute("/prescriptions", [apigwv2.HttpMethod.GET], prescriptionsFn, true);
+    addRoute("/prescriptions", [apigwv2.HttpMethod.GET, apigwv2.HttpMethod.POST], prescriptionsFn, true);
     addRoute("/prescriptions/{id}", [apigwv2.HttpMethod.GET], prescriptionsFn, true);
+    addRoute("/prescriptions/{id}/download", [apigwv2.HttpMethod.GET], prescriptionsFn, true);
+    addRoute("/prescriptions/{id}/audio", [apigwv2.HttpMethod.POST], prescriptionsFn, true);
+    addRoute("/prescriptions/{id}/translate", [apigwv2.HttpMethod.POST], prescriptionsFn, true);
+    addRoute("/patients/{id}/prescriptions", [apigwv2.HttpMethod.GET], prescriptionsFn, true);
+    addRoute("/doctors/{id}/prescriptions", [apigwv2.HttpMethod.GET], prescriptionsFn, true);
 
     // Automated follow-up calls: doctor's manual "Start follow-up call" test
     // button, and reading back call status/audit timeline.
