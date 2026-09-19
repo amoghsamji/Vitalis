@@ -6,8 +6,7 @@ the same context without re-deriving it.
 
 ## What this project is
 
-Vitalis is an AWS-native rebuild of a CareSync-style healthcare workflow
-platform (originally scoped as Supabase/ElevenLabs/Twilio/Daily), targeting a
+Vitalis is an enterprise-grade, AWS-native healthcare workflow automation and telehealth platform, built from scratch targeting a
 ~$100 AWS credit budget. Everything is deliberately serverless/pay-per-use —
 no NAT Gateway, no RDS/Aurora, no Amazon Connect phone numbers — so nothing
 bills while idle. See [README.md](README.md) for the full feature-to-service

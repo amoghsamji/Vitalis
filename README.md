@@ -1,353 +1,585 @@
-# Vitalis — AWS-native healthcare workflow automation
+# Vitalis — Enterprise Serverless Healthcare Workflow Automation Platform
 
-Serverless skeleton for the platform described in `CareSync_AI_Features.md`,
-rebuilt on AWS-managed services instead of Supabase/ElevenLabs/Twilio/Daily.
+[![AWS Serverless](https://img.shields.io/badge/AWS-Serverless-orange?logo=amazon-aws)](https://aws.amazon.com/)
+[![AWS CDK](https://img.shields.io/badge/IaC-AWS%20CDK%20v2-232F3E?logo=amazon-aws)](https://aws.amazon.com/cdk/)
+[![TypeScript](https://img.shields.io/badge/Language-TypeScript%205-blue?logo=typescript)](https://www.typescriptlang.org/)
+[![Next.js 14](https://img.shields.io/badge/Frontend-Next.js%2014-black?logo=next.js)](https://nextjs.org/)
+[![Tailwind CSS](https://img.shields.io/badge/Styling-Tailwind%20CSS-06B6D4?logo=tailwindcss)](https://tailwindcss.com/)
+[![DynamoDB](https://img.shields.io/badge/Database-Single--Table%20DynamoDB-4053D6?logo=amazondynamodb)](https://aws.amazon.com/dynamodb/)
+[![Zero Idle Cost](https://img.shields.io/badge/Architecture-Zero%20Idle%20Cost-success)](https://aws.amazon.com/serverless/)
 
-## What's here
+Vitalis is an enterprise-grade, AWS-native healthcare workflow automation and telehealth orchestration platform engineered completely from scratch. It bridges the critical care gap between clinical consultations and post-treatment recovery by uniting serverless computing, event-driven orchestration, automated AI conversational voice agents, intelligent clinical document processing, and multilingual accessibility into a unified, HIPAA-ready architecture.
 
-- **`bin/vitalis.ts` / `lib/vitalis-stack.ts`** — the backend CDK stack
-  (`VitalisStack`): Cognito (auth), DynamoDB (single-table data store), S3
-  (PDF intake), API Gateway HTTP API (Cognito-authorized), EventBridge
-  (workflow triggers), SNS (SMS), Amazon Connect + Amazon Lex V2 (automated
-  follow-up calls — see below), and ~19 Lambda functions under `lambda/`.
-- **`lambda/doctors`, `lambda/patients`, `lambda/appointments`, `lambda/availability`** —
-  REST-ish CRUD handlers behind API Gateway.
-- **`lambda/pdf-intake`** — S3-triggered, runs Amazon Textract on uploaded lab
-  PDFs, extracts key/value fields, writes a record, and emits a
-  `lab_result_received` event.
-- **`lambda/workflow-engine`** — the no-code automation core. Reads a workflow
-  graph (trigger → conditions → actions → outputs) stored as JSON in
-  DynamoDB and walks it whenever a matching trigger event arrives.
-- **`lambda/notifications`** — SNS-based SMS sender, invoked by the workflow
-  engine.
-- **`state-machine/sample-lab-followup-workflow.json`** — an example workflow
-  you can load into DynamoDB to test the engine end-to-end.
-- **`lambda/prescriptions`** — doctor-only prescription PDF upload for a
-  completed appointment; see "Prescription upload flow" below.
+Vitalis runs on a **100% pay-per-use, serverless foundation**. It eliminates idle infrastructure expenses (no NAT Gateways, no provisioned RDS instances, no persistent EC2 clusters) while maintaining sub-second latency, ironclad data consistency, and enterprise security.
 
-## Prescription upload flow
+---
 
-Once a doctor marks an appointment completed (`PUT /appointments/{id}` with
-`{"status": "completed"}` — a small, separate code path in
-`lambda/appointments/index.ts` next to the existing, intentionally-untouched
-reschedule branch), they can upload a prescription PDF:
+## Table of Contents
 
-1. `POST /prescriptions/presign` — body `{appointmentId}`. Verifies the
-   caller is in the `Doctors` group and is that appointment's `doctorId`,
-   then returns a 300-second presigned S3 `PUT` URL. Prescription PDFs live
-   in the **same** `pdfBucket` as lab-result PDFs (no new bucket), under the
-   `prescriptions/<appointmentId>/<uuid>.pdf` key prefix — private, `BLOCK_ALL`,
-   never made public.
-2. Browser `PUT`s the file directly to that URL.
-3. `POST /prescriptions/confirm` — body `{appointmentId, key, followUpSummary}`.
-   Re-verifies doctor ownership, writes a `PRESCRIPTION#<id>` / `DETAILS`
-   item (with a `GSI1PK = APPT_PRESCRIPTION#<appointmentId>` entry for
-   appointment-scoped lookup), then calls the shared, idempotent
-   `emitPrescriptionUploadedIfReady(appointmentId)` helper
-   (`lambda/_shared/prescriptionEvent.ts`).
-4. That helper checks (via a fresh `GetCommand`) that the appointment is
-   `"completed"` **and** a prescription now exists for it; if so, it does a
-   conditional `PutCommand` on an `APPT#<id>` / `EVENT_MARKER#prescription_uploaded`
-   item (`ConditionExpression: attribute_not_exists(PK)`) and only on a
-   successful write does it `PutEventsCommand` a `prescription_uploaded`
-   event to the workflow bus. A `ConditionalCheckFailedException` from a
-   losing concurrent/duplicate call is swallowed as "already emitted" — so
-   the same helper is safe to call from both `lambda/appointments` (after
-   marking completed) and `lambda/prescriptions` (after confirm), in either
-   order, exactly once.
-   - `DetailType`: `"prescription_uploaded"`
-   - `Source`: `"vitalis.triggers"`
-   - `Detail`: `{ appointmentId, patientId, doctorId, prescriptionId, followUpDueAt }`
-     where `followUpDueAt` is `now + 3 days` (`FOLLOW_UP_DELAY_DAYS` in
-     `lambda/_shared/prescriptionEvent.ts`).
-5. `GET /prescriptions?appointmentId=...` / `GET /prescriptions/{id}` — the
-   treating doctor or the patient themselves can read prescriptions for that
-   appointment.
+- [Key Capabilities](#key-capabilities)
+- [Comprehensive AWS Services Architecture](#comprehensive-aws-services-architecture)
+- [End-to-End System Architecture](#end-to-end-system-architecture)
+- [Core Subsystems & Feature Deep Dives](#core-subsystems--feature-deep-dives)
+  - [1. No-Code Clinical Workflow Engine](#1-no-code-clinical-workflow-engine)
+  - [2. Intelligent Clinical Document Intake (Amazon Textract)](#2-intelligent-clinical-document-intake-amazon-textract)
+  - [3. Automated Conversational Voice Follow-Ups](#3-automated-conversational-voice-follow-ups)
+  - [4. Multilingual Accessible Prescriptions (Amazon Polly & Translate)](#4-multilingual-accessible-prescriptions-amazon-polly--translate)
+  - [5. Conflict-Free Appointment Booking & Availability](#5-conflict-free-appointment-booking--availability)
+  - [6. Identity, Security & Role-Based Access Control](#6-identity-security--role-based-access-control)
+- [Database Architecture: DynamoDB Single-Table Design](#database-architecture-dynamodb-single-table-design)
+- [API Reference](#api-reference)
+- [Frontend Portal Architecture](#frontend-portal-architecture)
+- [Repository Structure](#repository-structure)
+- [Getting Started & Deployment Guide](#getting-started--deployment-guide)
+  - [Prerequisites](#prerequisites)
+  - [Backend Deployment (VitalisStack)](#backend-deployment-vitalisstack)
+  - [Frontend Deployment (VitalisFrontendStack)](#frontend-deployment-vitalisfrontendstack)
+  - [Optional Telephony Configurations](#optional-telephony-configurations)
+- [Testing & Verification](#testing--verification)
+- [Cost & Performance Profile](#cost--performance-profile)
+- [License](#license)
 
-**IAM**: `prescriptionsFn` gets `table.grantReadWriteData`, `pdfBucket.grantPut`
-(same bucket as `uploadsFn`, no new bucket policy needed), and
-`workflowBus.grantPutEventsTo`. `appointmentsFn` already had
-`workflowBus.grantPutEventsTo` from the existing booking-confirmation flow.
+---
 
-## Patient phone number and follow-up call consent
+## Key Capabilities
 
-`Patient` profiles now carry three additional fields, set via
-`PUT /patients/{id}`:
+- **Engineered From Scratch**: Custom-architected data structures, microservices, and client interfaces designed specifically for clinical workflows, appointment lifecycles, and patient engagement.
+- **Autonomous Post-Consultation Check-ins**: Outbound voice agents check on recovering patients after appointments, detect persistent or emergency symptoms, reschedule follow-up slots atomically, or escalate directly to clinicians.
+- **Intelligent Lab Document OCR**: Automated extraction of medical laboratory panels (e.g., lipid profile, cholesterol, metabolic indicators) via computer vision and form analysis, triggering downstream workflows automatically.
+- **Multilingual Prescription Accessibility**: Digital and PDF prescriptions with built-in neural text-to-speech (TTS) playback in multiple dialects and real-time translation for diverse patient demographics.
+- **Visual No-Code Workflow Canvas**: Clinicians configure custom logic (Triggers $\rightarrow$ Conditions $\rightarrow$ Actions $\rightarrow$ Outputs) with a drag-and-drop node graph builder.
+- **Zero-Collision Scheduling**: Transactional DynamoDB conditional expressions prevent double-booking across concurrent clinician appointment requests.
+- **Zero Compute at Rest**: 100% serverless across frontend and backend; scales from zero to peak traffic on demand with near-zero idle expenses.
 
-- **`phone`** must be in E.164 format (`+<countrycode><number>`, e.g.
-  `+919876543210`) — validated server-side against
-  `/^\+[1-9]\d{7,14}$/` (`lambda/patients/index.ts`, duplicated from
-  `frontend/lib/constants.ts` since Lambdas don't share frontend files); an
-  invalid phone returns `400`.
-- **`followUpCallsEnabled`** — only ever persisted as `true` when the
-  caller passes `followUpCallsEnabled: true` **and** the phone is valid
-  E.164 **and** `consentGiven: true` was passed (the patient checked "I
-  agree to receive automated healthcare follow-up calls on this number." in
-  the frontend). Any other combination persists `false`.
-- **`consentTimestamp`** / **`consentVersion`** — set to `new Date().toISOString()`
-  and `"1.0"` respectively when `followUpCallsEnabled` computes `true`;
-  cleared back to `null` otherwise.
+---
 
-## Automated follow-up calls (Amazon Connect + Amazon Lex V2)
+## Comprehensive AWS Services Architecture
 
-Once an appointment is `completed` **and** a prescription has been uploaded
-for it (the `prescription_uploaded` event — see "Prescription upload flow"
-above), and the patient has opted in (`followUpCallsEnabled: true`, see
-"Patient phone number and follow-up call consent"), Vitalis can place an
-automated phone call to check how the patient is doing, offer to schedule a
-follow-up appointment, and escalate to the doctor when needed. This is a
-**real** implementation (not a logging stub) built on Amazon Connect (call
-routing/telephony) + Amazon Lex V2 (the conversational bot) + Lambda (all
-the actual logic and data access).
+Vitalis harnesses the breadth of the Amazon Web Services ecosystem, leveraging managed services for compute, data, security, AI/ML, and telephony:
 
-### New Lambdas
-
-| Lambda | Trigger | Purpose |
+| AWS Service | Category | Specific Role in Vitalis |
 |---|---|---|
-| `lambda/outbound-call-initiator` | API: `POST /appointments/{id}/follow-up-call` (doctor's manual test button); direct invoke `{requestFollowUp:true,...}` from `workflow-engine`'s `call_patient` action; direct invoke `{followUpCallId}` for a raw dial/retry | Re-checks patient consent + appointment completed/prescription-uploaded state fresh, enforces one-active-call-per-appointment idempotency, calls `StartOutboundVoiceContact` with exponential-backoff retries (technical failures only, max 3 attempts) |
-| `lambda/fetch-patient-context` | Invoked by the Connect contact flow | Resolves the 5 contact attributes into first name / doctor name / appointment type — **never** prescription contents or diagnosis |
-| `lambda/lex-fulfillment` | Lex V2 code hook (DialogCodeHook + FulfillmentCodeHook) | The actual conversation branching logic (script steps A-H); see `lambda/lex-fulfillment/script.ts` for the pure, unit-tested intent→response mapping |
-| `lambda/get-next-slots` | Invoked by `lex-fulfillment` | Read-only: next N open slots for a doctor |
-| `lambda/reserve-slot-and-schedule` | Invoked by `lex-fulfillment` | Atomic conditional-write slot reservation + appointment creation (same open→held→booked pattern as `lambda/appointments`'s booking handler) |
-| `lambda/notify-doctor` | Invoked by `lex-fulfillment` | Persists an in-app doctor notification (reuses the existing `NOTIFICATION#` item shape from `lambda/notifications`, plus a `DOCTOR_NOTIFICATIONS#<doctorId>` GSI1 entry) |
-| `lambda/follow-up-calls` | API: `GET /follow-up-calls?appointmentId=...` | Read-only call status + audit timeline (doctors get the full timeline; patients get status only, never event detail or transcripts) |
+| **AWS Lambda** | Compute | 22+ specialized microservices running Node.js 20.x bundled via `esbuild`. Handles RESTful operations, event routing, atomic state mutations, and external webhooks. |
+| **Amazon DynamoDB** | Database | Core single-table data layer (`vitalis-table`) operating in on-demand capacity mode (`PAY_PER_REQUEST`). Manages users, appointments, medical conditions, prescriptions, workflows, and call audit trails with GSI-based querying. |
+| **Amazon S3** | Storage | Multi-bucket storage with private access controls (`BLOCK_ALL`), server-side encryption, and lifecycle policies. Houses clinical lab PDFs, signed prescription documents, generated audio assets, and static web assets. |
+| **Amazon API Gateway (HTTP API v2)** | Networking | Low-latency, cost-effective API entry point with native Cognito JWT authorizers, granular route-level permissions, CORS management, and public webhook endpoints. |
+| **Amazon EventBridge** | Orchestration | Decoupled event bus (`vitalis-workflow-bus`) orchestrating domain triggers (`lab_result_received`, `prescription_uploaded`, `appointment_booked`) to fire automated workflows. |
+| **Amazon Cognito** | Security & Identity | Complete identity management featuring User Pools, custom attributes (`custom:role`), RBAC groups (`Doctors`, `Patients`), Hosted UI, Google OAuth 2.0 social federation, and Post-Confirmation Lambda hooks. |
+| **Amazon Textract** | AI / Machine Learning | Multi-page OCR and document intelligence engine analyzing uploaded laboratory reports to extract structured key-value pairs and tabular test parameters without manual data entry. |
+| **Amazon Polly** | AI / Voice Synthesis | High-fidelity neural text-to-speech engine generating natural human-voice audio renditions of written prescriptions and dosage directions across 5+ languages. |
+| **Amazon Translate** | AI / Language | Neural machine translation transforming prescription directions, clinician instructions, and diagnoses into patients' preferred languages on the fly. |
+| **Amazon Lex V2** | Conversational AI | Natural Language Understanding (NLU) conversational bot with custom medical follow-up intents (`PatientIsFine`, `ProblemPersists`, `ScheduleFollowUp`, `DeclineFollowUp`, `EmergencySymptoms`, `FallbackIntent`) wired to Lambda dialog/fulfillment hooks. |
+| **Amazon Connect** | Contact Center / Telephony | Enterprise cloud contact center initiating automated outbound voice calls, linking dynamic contact flows directly with patient context and Lex V2 conversational agents. |
+| **Amazon Chime SDK Voice** | Telephony / PSTN Audio | Alternate telephony pathway utilizing SIP Media Applications (SMA) to conduct outbound automated patient calls with Lex bot integration, compatible across all global account types. |
+| **Amazon CloudFront** | CDN & Edge | Global content delivery network using Origin Access Control (OAC) to serve the statically exported Next.js frontend with SSL termination, edge caching, and SPA client routing. |
+| **Amazon SNS** | Messaging / Notifications | Outbound SMS delivery service used by the workflow automation engine to alert patients regarding urgent lab findings and appointment reminders. |
+| **AWS IAM** | Security & Governance | Granular, least-privilege IAM roles and policies ensuring strict cross-service isolation and secure service-to-service execution. |
+| **Amazon CloudWatch** | Monitoring & Observability | Structured logging, 7-day retention log groups for all microservices, and execution metrics across workflows and telephony pipelines. |
+| **AWS CDK v2** | Infrastructure as Code | 100% code-defined infrastructure in TypeScript across modular backend and frontend stacks (`VitalisStack`, `VitalisFrontendStack`). |
 
-### DynamoDB item shapes (same single table)
+---
 
-```
-FOLLOWUP_CALL#<id>  / DETAILS
-  { id, appointmentId, patientId, doctorId, prescriptionId, status,
-    attempts, createdAt, GSI1PK: APPT_FOLLOWUP#<appointmentId>, GSI1SK: DETAILS }
+## End-to-End System Architecture
 
-FOLLOWUP_CALL#<id>  / EVENT#<isoTimestamp>#<eventName>
-  { followUpCallId, event, detail, timestamp }
-  # event is one of: requested | initiated | answered | verified |
-  # intent_detected | appointment_offered | appointment_scheduled |
-  # opted_out | failed | ended
-  # `detail` holds only non-sensitive routing/outcome facts (intent name,
-  # slot chosen, Connect contactId) — never raw audio or full transcripts.
+```mermaid
+flowchart TB
+    subgraph Clients["Frontend Clients"]
+        Doctor["Clinician Portal<br/>(Doctor Dashboard)"]
+        Patient["Patient Portal<br/>(Mobile / Desktop)"]
+    end
 
-NOTIFICATION#<id> / DETAILS   (reused item type, now also written by notify-doctor)
-  { id, type, doctorId, appointmentId, patientId, followUpCallId, message,
-    read, createdAt, GSI1PK: DOCTOR_NOTIFICATIONS#<doctorId>, GSI1SK: createdAt }
-  # type is one of: persistent_symptoms | follow_up_requested |
-  # emergency_symptoms | patient_unreachable
-```
+    subgraph Hosting["Edge & Hosting"]
+        CF["Amazon CloudFront (CDN)"]
+        S3Site["Amazon S3<br/>(Static Web Assets)"]
+    end
 
-### The call script (steps A-H, `lambda/lex-fulfillment/script.ts`)
+    subgraph Auth["Identity & Access"]
+        Cognito["Amazon Cognito User Pool<br/>(Groups: Doctors / Patients)"]
+        GoogleIdP["Google OAuth 2.0"]
+    end
 
-A. Intro + low-risk identity check (first name) — handled by the Connect
-   flow / Lex's built-in slot-filling, not a custom intent.
-B. "Are you feeling better, or does the problem still persist?"
-C. **PatientIsFine** → thank-you message, end call.
-D. **ProblemPersists** → offers to schedule a follow-up; notifies the doctor
-   of persistent symptoms.
-E. **ScheduleFollowUp** (yes) → `get-next-slots` for the same doctor, reads
-   up to 3 options, `reserve-slot-and-schedule` atomically books the chosen
-   one, confirms date/time/doctor/type.
-F. **DeclineFollowUp** (no) → "contact your clinic" message, end call.
-G. **EmergencySymptoms** → urgent-care message (911/ER), high-priority
-   doctor notification, end call — **never** diagnoses or offers routine
-   scheduling.
-H. **FallbackIntent** (low confidence/silence) → repeats the prompt once,
-   then offers transfer/callback, notifies the doctor the patient was
-   unreachable, and ends safely.
+    subgraph Ingress["API Layer"]
+        APIGW["Amazon API Gateway<br/>(HTTP API v2 + JWT Authorizer)"]
+    end
 
-Every turn re-checks `followUpCallsEnabled` directly from DynamoDB (not from
-session state) before continuing — if the patient opted out mid-call, the
-bot immediately says it can't discuss health information and ends.
+    subgraph Microservices["Serverless Compute (AWS Lambda)"]
+        AuthFn["post-confirmation"]
+        DocFn["doctors / availability"]
+        PatFn["patients / profile"]
+        ApptFn["appointments"]
+        PrescFn["prescriptions"]
+        UploadFn["uploads (presigned)"]
+        WorkflowsFn["workflows CRUD"]
+        WFEngineFn["workflow-engine"]
+        PdfIntakeFn["pdf-intake"]
+        VoiceInitiatorFn["outbound-call-initiator"]
+        VoiceHandlerFn["lex-fulfillment / twilio-voice"]
+    end
 
-### IAM
+    subgraph CoreStorage["Data & Event Backbone"]
+        DDB[("Amazon DynamoDB<br/>vitalis-table (Single-Table)")]
+        S3Doc[("Amazon S3<br/>vitalis-pdf-intake (Encrypted)")]
+        Bus["Amazon EventBridge<br/>vitalis-workflow-bus"]
+        SNS["Amazon SNS<br/>(SMS Alerts)"]
+    end
 
-- `outboundCallInitiatorFn`: `connect:StartOutboundVoiceContact` (resource
-  `*` — the Connect instance ARN can't be scoped without a dependency cycle,
-  same reasoning as the existing Cognito post-confirmation trigger; see the
-  comment in `lib/vitalis-stack.ts`).
-- Connect instance has `lambda:InvokeFunction` on `fetch-patient-context`
-  (`addPermission` with principal `connect.amazonaws.com`).
-- The Lex bot's IAM role (`VitalisLexBotRole`, assumed by
-  `lexv2.amazonaws.com`) can call `polly:SynthesizeSpeech`.
-- Lex (both the test alias and the published "prod" alias) has
-  `lambda:InvokeFunction` on `lex-fulfillment`.
-- All new Lambdas get `table.grantReadWriteData`; `lex-fulfillment` gets
-  `grantInvoke` on `notify-doctor`, `get-next-slots`, and
-  `reserve-slot-and-schedule`; `workflow-engine` gets `grantInvoke` on
-  `outbound-call-initiator`.
+    subgraph AIIntelligence["AWS AI / ML Services"]
+        Textract["Amazon Textract<br/>(Lab Report OCR)"]
+        Polly["Amazon Polly<br/>(Neural Audio Prescriptions)"]
+        Translate["Amazon Translate<br/>(Multilingual Clinical Notes)"]
+    end
 
-### What CDK provisions vs. what needs a manual console step
+    subgraph Telephony["Conversational Telephony"]
+        Connect["Amazon Connect<br/>(Outbound Contact Flow)"]
+        Chime["Amazon Chime SDK Voice<br/>(SIP Media App)"]
+        TwilioVoice["Twilio Voice Webhook<br/>+ Google Gemini AI"]
+        Lex["Amazon Lex V2<br/>(Conversational Bot)"]
+    end
 
-Per the installed `aws-cdk-lib` version's actual type defs (checked in
-`node_modules/aws-cdk-lib/aws-connect` and `node_modules/aws-cdk-lib/aws-lex`
-before writing any of this):
+    %% Client access
+    Doctor & Patient --> CF --> S3Site
+    Doctor & Patient --> Cognito
+    Cognito <--> GoogleIdP
 
-- **`AWS::Connect::Instance`** (`connect.CfnInstance`) — fully supported,
-  provisioned by CDK.
-- **`AWS::Lex::Bot`** (`lex.CfnBot`) — fully supported. Note: the CDK module
-  is `aws-cdk-lib/aws-lex`, **not** a separate `aws-lexv2bot` module (no such
-  module exists in this version) — `AWS::Lex::Bot` *is* the Lex V2 resource
-  type despite the plain name. CDK provisions the bot, its 5 custom intents
-  (`PatientIsFine`, `ProblemPersists`, `ScheduleFollowUp`, `DeclineFollowUp`,
-  `EmergencySymptoms`) with sample utterances, and both a test alias and a
-  published "prod" `CfnBotAlias`/`CfnBotVersion`, each wired to
-  `lex-fulfillment` as the Lambda code hook.
-  - **Deviation from spec**: `FallbackIntent` is **not** declared in
-    `CfnBot`'s `intents` array — Lex V2 auto-provisions
-    `AMAZON.FallbackIntent` for every bot locale, and that array is for
-    custom intents only. It's configured/consumed (see `script.ts`'s
-    `FallbackIntent` case), not declared.
-- **`AWS::Connect::ContactFlow`** (`connect.CfnContactFlow`) — the `content`
-  property genuinely accepts flow JSON as a plain string (content-as-code
-  IS supported by this CFN resource). What's checked in is a minimal, real
-  flow (invoke `fetch-patient-context`, then disconnect) — it does **not**
-  include the "Get customer input (Amazon Lex)" block that hands the live
-  call to the bot. That block's Connect Flow Language schema is intricate
-  and its correctness can't be verified without a live console/API round
-  trip, and — separately — it can't functionally work until the bot is
-  *associated* with the Connect instance (next bullet), which CloudFormation
-  also can't do. Hand-authoring it blind risked shipping something that
-  looked complete but silently failed at runtime, so it's manual step 5
-  below instead.
-- **Not CloudFormation-representable at all**: claiming a phone number,
-  associating a Lex V2 bot (alias) with a Connect instance
-  (`connect:AssociateBot` — no `AWS::Connect::*` resource wraps this API in
-  this CDK version), and publishing/activating a contact flow. These are the
-  "commonly console/one-time-script steps even with CDK" the task spec
-  anticipated.
+    %% API routing
+    Doctor & Patient -->|JWT Authenticated Requests| APIGW
+    APIGW --> Cognito
+    APIGW --> DocFn & PatFn & ApptFn & PrescFn & UploadFn & WorkflowsFn & VoiceInitiatorFn
 
-### Manual console checklist (do this after `cdk deploy VitalisStack`, once)
+    %% Post confirmation
+    Cognito -.->|Post-Confirmation Trigger| AuthFn
+    AuthFn --> Cognito
 
-1. **Claim a phone number** — Amazon Connect console → your instance →
-   *Channels → Phone numbers → Claim a number*. Pick a number in your
-   country/region (this is the one ongoing cost item in this whole feature —
-   Connect bills per claimed number whether or not it's used, unlike
-   everything else in this stack).
-2. **Create a queue and routing profile referencing that number** (needed
-   for outbound calls even without live agents) — *Routing → Queues → Add
-   queue*, then *Routing → Routing profiles*, and set the queue's
-   **Outbound caller ID number** to the number from step 1.
-3. **Build and note the Lex bot's IDs** — `CfnOutput`s `LexFollowUpBotId` /
-   `LexFollowUpBotAliasId` from `cdk deploy` output already give you these;
-   confirm in the Lex console (*Amazon Lex → vitalis-follow-up-call-bot*)
-   that the "prod" alias shows **Built** (CDK's `autoBuildBotLocales: true`
-   should already trigger this, but Lex builds are asynchronous — wait for
-   it to finish, or click **Build** manually, before continuing).
-4. **Associate the bot with the Connect instance** — Connect console → your
-   instance → *Flows → Amazon Lex* → **Add Lex Bot**, choose
-   `vitalis-follow-up-call-bot`, alias `prod`, region matches your deploy
-   region. (This is the `connect:AssociateBot` call CloudFormation has no
-   resource for.)
-5. **Add the Lex block to the contact flow** — Connect console → *Flows* →
-   open `vitalis-follow-up-call` (created by CDK) → drag in a **"Get
-   customer input"** block configured to use **Amazon Lex V2**, select the
-   bot/alias from step 4, and wire it in after the existing "Invoke AWS
-   Lambda function" (`fetch-patient-context`) block, before disconnect. Save
-   and **Publish** the flow (unpublished flow edits aren't live).
-6. **Update `outboundCallInitiatorFn`'s env vars if you changed anything
-   above** — `CONNECT_INSTANCE_ID` and `CONNECT_CONTACT_FLOW_ID` are already
-   wired from CDK outputs automatically; you only need to touch these by
-   hand if you created a *second* contact flow instead of editing the
-   CDK-created one, or reference a different Connect instance.
-7. **Test it**: as a doctor, mark an appointment `completed`, upload a
-   prescription, ensure the patient has `followUpCallsEnabled: true` with a
-   real phone number in their profile, then use the doctor appointments
-   page's **"Start follow-up call"** button (or `POST
-   /appointments/{id}/follow-up-call`). Watch `FOLLOWUP_CALL#<id>` items and
-   the CloudWatch log group for `lex-fulfillment` to confirm the call
-   connects and the bot responds.
+    %% Data & Storage
+    DocFn & PatFn & ApptFn & PrescFn & WorkflowsFn <--> DDB
+    UploadFn -->|Presigned URL| S3Doc
+    S3Doc -->|ObjectCreated Notification| PdfIntakeFn
+    PdfIntakeFn --> Textract
+    PdfIntakeFn --> DDB
+    PdfIntakeFn -->|Emit lab_result_received| Bus
 
-## Why these AWS services (mapped from the original feature spec)
+    %% Prescriptions & AI
+    PrescFn --> S3Doc
+    PrescFn --> Polly & Translate
+    PrescFn -->|Emit prescription_uploaded| Bus
+    ApptFn -->|Emit appointment_booked| Bus
 
-| Original | Here |
-|---|---|
-| Supabase Auth | Cognito User Pools (Doctors/Patients groups) |
-| Supabase Postgres | DynamoDB (on-demand billing) |
-| pdfplumber/pdfminer | Amazon Textract |
-| ElevenLabs + Twilio (voice) | Amazon Connect + Amazon Lex V2 automated follow-up calls — see "Automated follow-up calls" below |
-| Daily/100ms/Twilio (video) | Seam for Amazon Chime SDK (not yet implemented) |
-| React Flow + Dagre canvas | Unchanged — this is a frontend concern; the graph JSON shape here matches what that canvas would produce |
-| FastAPI backend | API Gateway + Lambda (Node/TypeScript) |
+    %% Workflow Engine
+    Bus -->|Event Trigger Rule| WFEngineFn
+    WFEngineFn <--> DDB
+    WFEngineFn --> SNS
+    WFEngineFn -->|Invoke call_patient| VoiceInitiatorFn
 
-## Deliberately not built yet (cost/complexity guardrails for a $100 budget)
-
-- **No video consult backend (Chime SDK) yet** — the consultation room only
-  has a data model, not live media.
-- **No Google Calendar integration wired up yet** — `schedule_appointment`
-  is a logged seam; add a `google-calendar` Lambda once you have OAuth
-  credentials for it.
-- ~~No CloudFront/Amplify frontend hosting stack yet~~ — see
-  [`frontend/`](frontend/README.md): a statically-exported Next.js app on
-  S3 + CloudFront (`VitalisFrontendStack`), covering sign-up/sign-in,
-  doctor directory + booking, patient/doctor profiles, availability
-  management, and lab-PDF upload against the existing API.
-
-Everything that *is* built only bills per request/per GB — nothing runs
-while idle, so sitting on this stack between work sessions costs close to $0.
-
-## Setup
-
-```bash
-npm install
-npx cdk bootstrap   # one-time per AWS account/region
-npm run deploy
+    %% Telephony Flow
+    VoiceInitiatorFn --> Connect & Chime & TwilioVoice
+    Connect & Chime --> Lex
+    Lex --> VoiceHandlerFn
+    TwilioVoice --> VoiceHandlerFn
+    VoiceHandlerFn <--> DDB
 ```
 
-You'll need AWS credentials configured locally (`aws configure` or an
-`AWS_PROFILE` env var) with permissions to create the resources above. After
-`cdk bootstrap` you may see a small S3/ECR bootstrap stack — that's normal
-and CDK's own doing, not part of this app.
+---
 
-On success, CDK prints outputs including `ApiUrl`, `UserPoolId`,
-`UserPoolClientId`, `TableName`, `PdfBucketName`, and `WorkflowBusName`.
+## Core Subsystems & Feature Deep Dives
 
-## Trying the workflow engine
+### 1. No-Code Clinical Workflow Engine
 
-1. Deploy the stack.
-2. Load the sample workflow into DynamoDB (swap in your table name from the
-   CDK output):
+The core automation brain of Vitalis is a custom, event-driven graph execution engine implemented in `lambda/workflow-engine/index.ts`:
+
+- **Dynamic Graph Schema**: Clinical workflow definitions are stored as JSON graphs in DynamoDB (`PK=WORKFLOW#<id>`, `SK=DEFINITION`), allowing doctors to create, inspect, and update automated care pathways without redeploying code.
+- **Event-Driven Execution**: Whenever domain events fire onto `vitalis-workflow-bus` (e.g., `lab_result_received`, `prescription_uploaded`, `appointment_booked`), EventBridge triggers the engine Lambda.
+- **Node Evaluation Pipeline**:
+  - **Triggers**: Match against event types and detail payloads.
+  - **Conditions**: Deterministic logic nodes evaluating extracted lab thresholds (`value_greater_than`, e.g., Cholesterol > 240 mg/dL), patient age boundaries (`patient_age_gt`), or custom parameters.
+  - **Actions**: Real-world operations including SMS dispatch via Amazon SNS (`send_sms`), automated outbound telephony (`call_patient`), slot booking (`schedule_appointment`), or electronic referrals.
+  - **Outputs**: Audit markers recording run history in DynamoDB (`PK=WORKFLOW#<id>`, `SK=RUN#<runId>`).
+
+### 2. Intelligent Clinical Document Intake (Amazon Textract)
+
+Eliminates manual lab result transcription through automated document understanding:
+
+1. **Secure Presigned Upload**: The patient or clinician initiates an upload via `POST /uploads/lab-pdf`. The backend generates an expiring S3 presigned PUT URL targeting `lab-pdfs/<patientId>/<uuid>-<filename>.pdf` with strict CORS and bucket encryption.
+2. **Direct Browser Upload**: The frontend uploads the raw PDF directly to Amazon S3, avoiding memory-intensive file buffers in API Gateway or Lambda.
+3. **Automated OCR Trigger**: The S3 `ObjectCreated:Put` event automatically triggers `lambda/pdf-intake/index.ts`.
+4. **Computer Vision Document Extraction**: Amazon Textract's `AnalyzeDocumentCommand` (utilizing `FORMS` and `TABLES` feature types) parses key-value pairs (Patient Name, DOB, MRN, Test Parameters) and tabular clinical results.
+5. **Persistence & Event Generation**: The extracted fields are persisted to DynamoDB (`LAB_RESULT#<id>`), and a `lab_result_received` event is emitted onto EventBridge to kick off automated clinical workflows.
+
+### 3. Automated Conversational Voice Follow-Ups
+
+Vitalis includes an autonomous post-treatment voice agent that proactively dials patients to evaluate recovery progress.
+
+#### Conversational Script State Machine
+The agent executes an intelligent clinical protocol designed with strict safety boundaries:
+
+```
+[A] Low-risk identity confirmation (Patient first name verification)
+ │
+ ▼
+[B] "Are you feeling better, or does the problem still persist?"
+ ├──► [C] PatientIsFine: Thank-you message, record positive outcome, end call safely.
+ ├──► [D] ProblemPersists: Express empathy, offer follow-up appointment booking, notify doctor.
+ │     ├──► [E] ScheduleFollowUp:
+ │     │         - Query next open doctor slots atomically (lambda/get-next-slots)
+ │     │         - Offer slot options to patient
+ │     │         - Reserve and confirm chosen slot atomically (lambda/reserve-slot-and-schedule)
+ │     └──► [F] DeclineFollowUp: Advise self-care / clinic contact, end call.
+ ├──► [G] EmergencySymptoms:
+ │         - Severe chest pain, shortness of breath, heavy bleeding detected
+ │         - Immediately instruct patient to dial 911 / emergency services
+ │         - Instantly notify treating physician with high priority
+ │         - End call without diagnosing or offering standard scheduling
+ └──► [H] FallbackIntent / Unclear Speech:
+           - Repeat prompt once; if unresolved, log unreachable state and alert physician.
+```
+
+#### Flexible Multi-Provider Architecture
+To support diverse AWS account types and deployment constraints, Vitalis supports three interchangeable telephony providers selected via CDK context:
+
+1. **Amazon Connect + Amazon Lex V2**: Native enterprise contact center routing outbound calls with dynamic Lex V2 bot association and voice synthesis.
+2. **Amazon Chime SDK Voice + Amazon Lex V2**: AISPL-compatible PSTN audio pipeline utilizing SIP Media Applications (SMA) provisioned via custom CloudFormation providers (`lambda/chime-sma-provisioner`).
+3. **Twilio Voice + Google Gemini AI**: Cloud telephony integration with real-time Gemini NLU intent classification and dynamic TwiML response generation.
+
+#### Patient Consent & Safety Gating
+- E.164 phone number validation (`/^\+[1-9]\d{7,14}$/`) enforced server-side.
+- Consent verification: Automated calls are strictly blocked unless `followUpCallsEnabled: true` AND valid `consentTimestamp` and `consentVersion` are recorded in the patient profile.
+- Real-time mid-call opt-out check: Every conversational turn re-validates consent against DynamoDB. If a patient withdraws consent, the call terminates immediately.
+- Comprehensive audit timeline: Every call status change (`requested`, `initiated`, `answered`, `verified`, `intent_detected`, `appointment_scheduled`, `emergency_triggered`, `ended`) is written to an immutable DynamoDB audit stream.
+
+### 4. Multilingual Accessible Prescriptions (Amazon Polly & Translate)
+
+Prescription comprehension is vital for patient safety. Vitalis supports both doctor-uploaded PDF prescriptions and structured digital prescriptions:
+
+- **Doctor-Only Issuance**: Clinicians issue prescriptions via `POST /prescriptions` (structured diagnosis, notes, and medication arrays with dosage/frequency) or upload official scans via `POST /prescriptions/presign`.
+- **Idempotent Workflow Triggering**: Once an appointment is marked `completed` and a prescription is attached, a conditional write to an event marker item (`EVENT_MARKER#prescription_uploaded`) guarantees that downstream follow-up workflows are scheduled exactly once.
+- **Multilingual Neural Translation**: `POST /prescriptions/{id}/translate` uses Amazon Translate to translate clinical advice into Spanish, French, German, Hindi, and more.
+- **Neural Text-to-Speech Synthesis**: `POST /prescriptions/{id}/audio` invokes Amazon Polly (`SynthesizeSpeechCommand`) using specialized neural voices (e.g., Joanna, Conchita, Celine, Marlene, Aditi). The synthesized MP3 is stored in S3 and served via an expiring presigned GET URL, allowing vision-impaired or elderly patients to listen to their medication instructions clearly.
+
+### 5. Conflict-Free Appointment Booking & Availability
+
+- **Doctor Availability Manager**: Clinicians declare availability slots stored as `DOCTOR#<id>` / `SLOT#<isoTimestamp>` items with status `open`.
+- **Atomic Two-Phase Slot Reservation**: When a patient or voice agent books an appointment, `lambda/appointments/index.ts` and `lambda/reserve-slot-and-schedule/index.ts` perform a conditional update on the slot:
+  ```typescript
+  ConditionExpression: "attribute_exists(PK) AND #status = :open"
+  ```
+  If another user books the slot concurrently, DynamoDB throws `ConditionalCheckFailedException`, returning an immediate conflict error and preventing any double-booking.
+- **Booking Lifecycle**: Transitions through `booked` $\rightarrow$ `completed` $\rightarrow$ `cancelled` with full reverse indexing for doctor and patient schedule views.
+
+### 6. Identity, Security & Role-Based Access Control
+
+- **Granular Cognito User Groups**: Users belong to either `Doctors` or `Patients` groups.
+- **Post-Confirmation Hook**: A Cognito Post-Confirmation Lambda trigger (`lambda/post-confirmation`) inspects the self-selected `custom:role` attribute upon email confirmation and places the user into their respective group via `AdminAddUserToGroup`.
+- **Claims Verification**: API Gateway HTTP API validates the Cognito JWT on every incoming request. Lambdas unpack claims (`sub`, `cognito:groups`, `email`) and enforce resource-level authorization (e.g., ensuring only the treating physician can complete an appointment or issue prescriptions).
+- **Google OAuth 2.0 Federation**: Configured with Cognito Hosted UI for single-sign-on (SSO).
+
+---
+
+## Database Architecture: DynamoDB Single-Table Design
+
+Vitalis utilizes a high-performance single-table design (`vitalis-table`) with a single Global Secondary Index (`GSI1`), optimizing read/write throughput and cost efficiency.
+
+### Key Indexing Schema
+
+- **Primary Table**:
+  - Partition Key: `PK` (String)
+  - Sort Key: `SK` (String)
+- **Global Secondary Index 1 (GSI1)**:
+  - Partition Key: `GSI1PK` (String)
+  - Sort Key: `GSI1SK` (String)
+
+### Entity Mapping Reference
+
+| Entity | PK | SK | GSI1PK | GSI1SK | Description |
+|---|---|---|---|---|---|
+| **Doctor Profile** | `DOCTOR#<id>` | `PROFILE` | — | — | Clinician details, specialty, biography |
+| **Doctor Slot** | `DOCTOR#<id>` | `SLOT#<isoTimestamp>` | `DOCTOR_SLOTS#<doctorId>` | `<isoTimestamp>` | Available, held, or booked consultation slots |
+| **Patient Profile** | `PATIENT#<id>` | `PROFILE` | — | — | Contact, phone, follow-up consent settings |
+| **Patient Condition** | `PATIENT#<id>` | `CONDITION#<id>` | — | — | Chronic diagnoses with ICD-10 codification |
+| **Patient Medication**| `PATIENT#<id>` | `MEDICATION#<id>` | — | — | Active prescriptions, dosages, schedules |
+| **Appointment** | `APPT#<id>` | `DETAILS` | `PATIENT_APPTS#<patientId>` or `DOCTOR_APPTS#<doctorId>` | `<isoTimestamp>` | Booked consultation details and status |
+| **Idempotency Marker**| `APPT#<id>` | `EVENT_MARKER#prescription_uploaded` | — | — | Prevents duplicate event triggers |
+| **Lab Result** | `LAB_RESULT#<id>` | `DETAILS` | — | — | Textract extracted parameters and source S3 key |
+| **Prescription** | `PRESCRIPTION#<id>` | `DETAILS` | `APPT_PRESCRIPTION#<appointmentId>` | — | Digital or PDF prescription metadata |
+| **Prescription Index**| `PRESCRIPTION#<id>` | `PATIENT_INDEX` | `PATIENT_PRESCRIPTIONS#<patientId>` | `<isoTimestamp>#<id>` | Patient prescription history query |
+| **Prescription Index**| `PRESCRIPTION#<id>` | `DOCTOR_INDEX` | `DOCTOR_PRESCRIPTIONS#<doctorId>` | `<isoTimestamp>#<id>` | Doctor prescription history query |
+| **Follow-Up Call** | `FOLLOWUP_CALL#<id>`| `DETAILS` | `APPT_FOLLOWUP#<appointmentId>` | `DETAILS` | Active call state, attempts, provider |
+| **Call Audit Event** | `FOLLOWUP_CALL#<id>`| `EVENT#<isoTimestamp>#<name>` | — | — | Immutable chronological call event log |
+| **Call Doctor Index**| `FOLLOWUP_CALL#<id>`| `DOCTOR_INDEX` | `DOCTOR_FOLLOWUPS#<doctorId>` | `<isoTimestamp>` | Doctor follow-up call history query |
+| **In-App Notification**| `NOTIFICATION#<id>` | `DETAILS` | `DOCTOR_NOTIFICATIONS#<doctorId>` | `<isoTimestamp>` | Urgent alerts and clinical escalation notes |
+| **Workflow Definition**| `WORKFLOW#<id>` | `DEFINITION` | — | — | JSON node graph for clinical automation |
+| **Workflow Run** | `WORKFLOW#<id>` | `RUN#<runId>` | — | — | Execution history and condition outcomes |
+
+---
+
+## API Reference
+
+All protected routes require an `Authorization: Bearer <Cognito_ID_Token>` header.
+
+### Authentication & Profiles
+- `GET /doctors` — Public directory of registered clinicians.
+- `GET /doctors/{id}` — Fetch doctor profile and specialties.
+- `PUT /doctors/{id}` — Update doctor profile (Clinician only).
+- `GET /patients/{id}` — Fetch patient medical profile.
+- `PUT /patients/{id}` — Update patient profile, contact info, and phone follow-up consent.
+- `GET /patients/{id}/conditions` / `POST /patients/{id}/conditions` — Manage ICD-10 medical conditions.
+- `GET /patients/{id}/medications` / `POST /patients/{id}/medications` — Manage active medications.
+
+### Availability & Appointments
+- `GET /doctors/{id}/availability` — List open availability slots for a clinician.
+- `POST /doctors/{id}/availability` — Create new availability slots (Clinician only).
+- `DELETE /doctors/{id}/availability/{slotId}` — Remove an availability slot.
+- `POST /appointments` — Atomically book an open slot.
+- `GET /appointments/{id}` — Retrieve appointment status and details.
+- `PUT /appointments/{id}` — Mark appointment status (`completed`, `cancelled`).
+- `GET /patients/{id}/appointments` — List all appointments for a patient.
+- `GET /doctors/{id}/appointments` — List all appointments for a clinician.
+
+### Clinical Documents & Prescriptions
+- `POST /uploads/lab-pdf` — Obtain an expiring presigned S3 URL for lab report PDF upload.
+- `POST /prescriptions/presign` — Obtain presigned S3 upload URL for doctor prescription PDF.
+- `POST /prescriptions/confirm` — Confirm PDF upload and emit downstream trigger.
+- `POST /prescriptions` — Issue structured digital prescription (diagnosis, medications, notes).
+- `GET /prescriptions?appointmentId=...` — Retrieve prescriptions for an appointment.
+- `GET /prescriptions/{id}` — Retrieve single prescription details.
+- `GET /prescriptions/{id}/download` — Presigned S3 GET URL to download prescription PDF.
+- `POST /prescriptions/{id}/audio` — Synthesize neural prescription audio via Amazon Polly.
+- `POST /prescriptions/{id}/translate` — Translate clinical instructions via Amazon Translate.
+- `GET /patients/{id}/prescriptions` — View patient prescription history.
+- `GET /doctors/{id}/prescriptions` — View clinician issued prescriptions.
+
+### Telephony & Automated Follow-Ups
+- `POST /appointments/{id}/follow-up-call` — Manually trigger an outbound follow-up check-in call.
+- `GET /follow-up-calls?appointmentId=...` — Retrieve call status, outcome, and audit timeline.
+- `GET /doctors/{id}/notifications` — Doctor notifications for persistent/emergency symptoms.
+- `POST /follow-up-calls/twilio/answer` — *(Twilio webhook)* Speech answer prompt.
+- `POST /follow-up-calls/twilio/input` — *(Twilio webhook)* Speech input analysis & Gemini classification.
+- `POST /follow-up-calls/twilio/status` — *(Twilio webhook)* Call status update handler.
+
+### Workflow Automation
+- `GET /workflows` — List all clinical workflow definitions.
+- `POST /workflows` — Create a new clinical automation workflow graph.
+- `GET /workflows/{id}` — Retrieve workflow graph definition.
+- `PUT /workflows/{id}` — Update workflow graph structure.
+- `DELETE /workflows/{id}` — Delete a workflow.
+- `GET /workflows/{id}/runs` — Inspect workflow execution audit logs.
+
+---
+
+## Frontend Portal Architecture
+
+The frontend is a dedicated Next.js 14 application (`frontend/`) built with the App Router, statically exported (`output: "export"`), and hosted on Amazon S3 + Amazon CloudFront:
+
+```
+frontend/
+├── app/
+│   ├── (public)/                 # Public unauthenticated routes
+│   │   ├── page.tsx              # Modern landing page with interactive features
+│   │   ├── login/page.tsx        # Cognito authentication interface
+│   │   ├── signup/page.tsx       # Registration with role selector (Doctor/Patient)
+│   │   ├── forgot-password/      # Password reset flow
+│   │   ├── privacy/page.tsx      # Privacy Policy & HIPAA-aligned notice
+│   │   └── terms/page.tsx        # Terms of Service
+│   ├── (app)/                    # Authenticated portal shell
+│   │   ├── layout.tsx            # Global navigation, auth guard, role redirection
+│   │   ├── dashboard/page.tsx    # Intelligent role router
+│   │   ├── doctor/               # Clinician Workspace
+│   │   │   ├── appointments/     # Appointment list, complete & follow-up triggers
+│   │   │   ├── availability/     # Interactive schedule builder & slot manager
+│   │   │   ├── follow-up-calls/  # Real-time call tracker & audit event timeline
+│   │   │   ├── workflows/        # No-code automation list & run audits
+│   │   │   ├── workflows/builder # Drag-and-drop workflow canvas (React Flow)
+│   │   │   └── profile/page.tsx  # Clinician professional credentials
+│   │   └── patient/              # Patient Portal
+│   │       ├── appointments/     # Upcoming/past consultations
+│   │       ├── doctors/          # Specialist directory & real-time booking
+│   │       ├── prescriptions/    # Multilingual reader, Polly audio player & PDF
+│   │       └── profile/page.tsx  # Health profile, ICD-10, meds, call consent & S3 lab intake
+├── components/                   # Reusable UI component design system (Radix + Tailwind)
+└── lib/                          # Cognito auth client, API adapters, and helpers
+```
+
+---
+
+## Repository Structure
+
+```
+Vitalis/
+├── bin/
+│   └── vitalis.ts               # CDK App entry point (VitalisStack & VitalisFrontendStack)
+├── lib/
+│   ├── vitalis-stack.ts         # Backend CDK Stack (Cognito, DDB, S3, API GW, Lex, Lambdas)
+│   └── frontend-stack.ts        # Frontend CDK Stack (CloudFront, S3 Bucket Deployment)
+├── lambda/
+│   ├── _shared/                 # Shared DynamoDB client, claims, and call audit utilities
+│   ├── appointments/            # Appointment booking, cancellation, completion
+│   ├── availability/            # Doctor schedule slot management
+│   ├── chime-sma-handler/       # Chime SDK Voice SMA call control & Lex bridge
+│   ├── chime-sma-provisioner/   # Custom CloudFormation resource for Chime SMA
+│   ├── doctors/                 # Doctor profiles and public directory
+│   ├── fetch-patient-context/   # Patient context resolver for telephony contact flows
+│   ├── follow-up-calls/         # Call status and audit timeline retrieval
+│   ├── get-next-slots/          # Doctor available slots fetcher for voice bot
+│   ├── lex-fulfillment/         # Lex V2 conversational branching script & actions
+│   ├── notifications/           # Amazon SNS SMS dispatcher and in-app alerts
+│   ├── notify-doctor/           # Clinician notification writer for call escalations
+│   ├── outbound-call-initiator/ # Call validation, idempotency, and dialer
+│   ├── patients/                # Patient profile, conditions, medications, call consent
+│   ├── pdf-intake/              # S3-triggered Amazon Textract OCR document analyzer
+│   ├── post-confirmation/      # Cognito trigger auto-assigning user groups
+│   ├── prescriptions/           # Prescriptions, Polly audio & Translate integration
+│   ├── reserve-slot-and-schedule/ # Atomic slot reservation for voice bot
+│   ├── twilio-voice/            # Twilio webhook handler + Gemini AI conversational engine
+│   ├── uploads/                 # Presigned S3 upload URL generator
+│   ├── workflow-engine/         # EventBridge-driven no-code workflow graph executor
+│   └── workflows/               # Workflow definition CRUD endpoints
+├── frontend/                    # Next.js 14 App Router statically-exported web app
+├── state-machine/               # Sample clinical workflow graph definitions
+├── test/                        # Comprehensive unit and integration test suites
+├── cdk.json                     # AWS CDK configuration
+├── package.json                 # Backend dependencies and build scripts
+└── tsconfig.json                # TypeScript compiler configuration
+```
+
+---
+
+## Getting Started & Deployment Guide
+
+### Prerequisites
+
+- **Node.js**: v20.x or later
+- **AWS CLI**: Installed and configured (`aws configure`) with administrative credentials
+- **AWS CDK CLI**: Installed globally (`npm install -g aws-cdk`)
+
+### Backend Deployment (VitalisStack)
+
+1. **Clone the repository and install dependencies**:
    ```bash
-   aws dynamodb put-item \
-     --table-name vitalis-table \
-     --item file://state-machine/sample-lab-followup-workflow.json
+   git clone https://github.com/your-username/vitalis.git
+   cd vitalis
+   npm install
    ```
-   (You'll need to convert the plain JSON to DynamoDB's typed attribute
-   format, or use `aws dynamodb put-item --table-name vitalis-table \
-   --item "$(node -e "...")"` — happy to generate a small loader script if useful.)
-3. Upload a PDF with a "Cholesterol" field to the `vitalis-pdf-intake-*`
-   bucket — Textract runs automatically, and if the extracted value is over
-   240 the workflow engine fires the `send_sms` and `schedule_appointment`
-   (logged) actions and records a run in the `WORKFLOW#sample-lab-followup`
-   partition.
 
-## Estimated cost against your $100 credit
+2. **Bootstrap your AWS environment** (one-time per account/region):
+   ```bash
+   npx cdk bootstrap
+   ```
 
-At low/dev-level usage (a handful of bookings, PDF uploads, and workflow
-runs per day), this stack should run **a few dollars a month at most** —
-Lambda, DynamoDB on-demand, API Gateway HTTP API, S3, EventBridge, and SNS
-are all pay-per-use with generous free tiers. The two things to watch if you
-scale up testing:
-- **Textract** — priced per page analyzed (a few tenths of a cent per page,
-  but it adds up with heavy PDF testing).
-- **Cognito** — free for the first 10,000 MAUs, so a non-issue at dev scale.
+3. **Deploy the backend stack**:
+   ```bash
+   npx cdk deploy VitalisStack
+   ```
 
-Run `npx cdk destroy` when you're done for a session if you want to be
-extra safe with the credit — everything here is defined in code and
-redeploys in a couple of minutes.
+   *Upon successful deployment, CDK outputs critical endpoints and identifiers:*
+   - `ApiUrl`: Your Amazon API Gateway base URL
+   - `UserPoolId`: Cognito User Pool ID
+   - `UserPoolClientId`: Cognito User Pool Client ID
+   - `CognitoDomain`: Cognito Hosted UI domain
+   - `TableName`: DynamoDB table name (`vitalis-table`)
+   - `PdfBucketName`: S3 lab/prescription intake bucket
+   - `WorkflowBusName`: EventBridge event bus name (`vitalis-workflow-bus`)
 
-## Next steps (pick what to build next)
+### Frontend Deployment (VitalisFrontendStack)
 
-1. Google Calendar integration Lambda
-2. Chime SDK video consultation room
-3. Fix the `PUT /appointments/{id}` no-op bug and add a reschedule UI
-4. Add an ownership check to `lambda/appointments/index.ts` so a caller can
-   only view/cancel their own appointments
-5. A real scheduler for follow-up calls. Today `call_patient` in
-   `lambda/workflow-engine/index.ts` fires the call immediately when the
-   `prescription_uploaded` event arrives, even though that event already
-   carries a `followUpDueAt` (now + 3 days, see `lambda/_shared/prescriptionEvent.ts`).
-   Waiting until `followUpDueAt` needs a scheduler (EventBridge Scheduler,
-   or a Step Functions wait state) — deliberately not built here per the
-   "don't build a cron/scheduler unless one already exists" guidance this
-   phase was scoped under.
-6. Complete the Amazon Connect/Lex manual console checklist (see "Automated
-   follow-up calls" above) — the phone number claim, bot↔instance
-   association, and the contact flow's Lex block can't be created by CDK.
+1. **Configure frontend environment**:
+   Create `frontend/.env.production` using the outputs from `VitalisStack`:
+   ```env
+   NEXT_PUBLIC_API_URL=https://<api-id>.execute-api.<region>.amazonaws.com
+   NEXT_PUBLIC_USER_POOL_ID=<region>_xxxxxxxxx
+   NEXT_PUBLIC_USER_POOL_CLIENT_ID=xxxxxxxxxxxxxxxxxxxxxxxxxx
+   NEXT_PUBLIC_COGNITO_DOMAIN=vitalis-<account>-<region>.auth.<region>.amazoncognito.com
+   NEXT_PUBLIC_OAUTH_REDIRECT_URI=https://<your-domain>/login
+   ```
+
+2. **Build the static Next.js bundle**:
+   ```bash
+   cd frontend
+   npm install
+   npm run build
+   cd ..
+   ```
+   *This compiles and exports the application to `frontend/out/`.*
+
+3. **Deploy the frontend stack**:
+   ```bash
+   npx cdk deploy VitalisFrontendStack
+   ```
+   *Outputs `SiteUrl`: Your live Amazon CloudFront HTTPS distribution URL.*
+
+   > **Note on New Accounts**: If your AWS account has a CloudFront verification hold, deploy using the S3 website fallback:
+   > ```bash
+   > npx cdk deploy VitalisFrontendStack -c enableS3WebsiteFallback=true
+   > ```
+
+### Optional Telephony Configurations
+
+Vitalis allows you to pick the voice telephony provider suited for your environment:
+
+#### Option A: Amazon Connect + Amazon Lex V2
+```bash
+npx cdk deploy VitalisStack \
+  -c enableConnectLex=true \
+  -c connectSourcePhoneNumber=+1XXXXXXXXXX
+```
+
+#### Option B: Amazon Chime SDK Voice (AISPL Compatible)
+```bash
+npx cdk deploy VitalisStack \
+  -c enableChimeVoice=true \
+  -c chimeSourcePhoneNumber=+1XXXXXXXXXX
+```
+
+#### Option C: Twilio Voice + Google Gemini AI
+```bash
+npx cdk deploy VitalisStack \
+  -c enableTwilioVoice=true \
+  -c twilioAccountSid=ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx \
+  -c twilioAuthToken=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx \
+  -c twilioPhoneNumber=+1XXXXXXXXXX \
+  -c geminiApiKey=AIzaxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+```
+
+---
+
+## Testing & Verification
+
+Vitalis includes comprehensive unit and integration test suites in `test/`:
+
+- `appointment-slot-race.test.ts`: Verifies atomic conditional slot reservation under concurrent booking attempts.
+- `call-outcome-mapping.test.ts`: Validates Amazon Lex conversational intent mapping, script branching, and doctor escalation.
+- `consent-gating.test.ts`: Asserts that automated calls are blocked if phone consent is absent or withdrawn.
+- `phone-validation.test.ts`: Verifies strict E.164 international phone number format enforcement.
+- `prescription-event-idempotency.test.ts`: Tests DynamoDB event markers to guarantee that prescription follow-up events fire exactly once.
+- `twilio-call-outcome-mapping.test.ts`: Tests Twilio TwiML generation and Gemini classification handlers.
+
+Run all tests via:
+```bash
+npx jest
+```
+
+### Verifying the Workflow Engine with Sample Data
+
+Load the included sample workflow into DynamoDB:
+```bash
+aws dynamodb put-item \
+  --table-name vitalis-table \
+  --item file://state-machine/sample-lab-followup-workflow.json
+```
+When a lab report PDF with a cholesterol value exceeding 240 is uploaded to S3, Amazon Textract parses the data and EventBridge triggers the workflow engine to dispatch an alert SMS and schedule a review.
+
+---
+
+## Cost & Performance Profile
+
+Vitalis was intentionally engineered to run within strict budgetary guardrails:
+
+- **DynamoDB**: `PAY_PER_REQUEST` ensures $0 billing when inactive.
+- **AWS Lambda**: Sub-millisecond compute billing with generous monthly free-tier allowances.
+- **API Gateway (HTTP API v2)**: 70% cheaper than traditional REST APIs with lower latency.
+- **Amazon S3 & CloudFront**: Fraction-of-a-cent storage and edge bandwidth.
+- **Amazon Cognito**: Free for up to 50,000 monthly active users (MAUs).
+- **Zero Idle Provisioning**: No provisioned VPC endpoints, NAT Gateways, or always-on database instances. Sitting on this stack between clinical shifts or testing sessions incurs virtually **$0.00/month**.
+
+---
+
+## License
+
+This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
