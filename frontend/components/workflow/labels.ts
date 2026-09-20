@@ -3,6 +3,7 @@ import type { ActionType, ConditionCheck, OutputType, TriggerType } from "@/lib/
 export const TRIGGER_LABELS: Record<TriggerType, string> = {
   lab_result_received: "Lab result received",
   appointment_booked: "Appointment booked",
+  prescription_uploaded: "Prescription issued",
 };
 
 export const CONDITION_LABELS: Record<ConditionCheck, string> = {
@@ -21,10 +22,6 @@ export const ACTION_LABELS: Record<ActionType, string> = {
   assign_staff: "Assign staff",
 };
 
-// send_sms and call_patient are actually implemented — lambda/workflow-engine/index.ts's
-// executeAction logs everything else. Keep the UI honest about that.
-// call_patient triggers a real Amazon Connect + Lex V2 automated follow-up
-// call via lambda/outbound-call-initiator (see lib/vitalis-stack.ts).
 export const FUNCTIONAL_ACTIONS: ActionType[] = ["send_sms", "call_patient"];
 
 export const OUTPUT_LABELS: Record<OutputType, string> = {

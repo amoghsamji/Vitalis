@@ -50,11 +50,9 @@ export interface Prescription {
   patientId: string;
   doctorId: string;
   type: "pdf" | "digital";
-  // "pdf" fields
   key?: string;
   uploadedAt?: string;
   followUpSummary?: string | null;
-  // "digital" fields
   diagnosis?: string | null;
   notes?: string | null;
   medications?: PrescriptionMedicationItem[];
@@ -97,15 +95,10 @@ export interface Appointment {
   createdAt: string;
 }
 
-// Only these two trigger types are actually emitted anywhere in the backend today
-// (lambda/pdf-intake and lambda/appointments) — the workflow engine's doc comment
-// mentions more, but nothing else fires them yet.
-export type TriggerType = "lab_result_received" | "appointment_booked";
+export type TriggerType = "lab_result_received" | "appointment_booked" | "prescription_uploaded";
 
 export type ConditionCheck = "value_greater_than" | "patient_age_gt" | "always_true";
 
-// send_sms is the only action lambda/workflow-engine/index.ts actually performs;
-// the rest are logged-only stubs (see executeAction's switch).
 export type ActionType =
   | "send_sms"
   | "call_patient"
@@ -119,9 +112,6 @@ export type OutputType = "log_completion" | "generate_transcript" | "create_repo
 
 interface WorkflowNodeBase {
   id: string;
-  // Canvas position — not read by the backend engine at all (it only walks
-  // next/onTrue/onFalse), but round-tripped through the graph JSON so the builder
-  // doesn't lose layout between saves.
   position: { x: number; y: number };
 }
 
@@ -165,9 +155,6 @@ export interface Workflow {
   updatedAt?: string;
 }
 
-// Mirrors lambda/_shared/callAudit.ts's CallEventName + FOLLOWUP_CALL# item shape.
-// Backend actually sets "ended" (not "completed") on real completion — both
-// are kept here since "completed" was the original documented vocabulary.
 export type FollowUpCallStatus =
   | "requested"
   | "initiated"

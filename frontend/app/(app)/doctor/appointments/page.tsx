@@ -49,19 +49,36 @@ export default function DoctorAppointmentsPage() {
 
   useEffect(() => {
     if (!session) return;
-    api
-      .listDoctorAppointments(session.sub, session.idToken)
-      .then(async ({ appointments }) => {
-        const sorted = appointments.slice().sort((a, b) => a.startTime.localeCompare(b.startTime));
-        setAppointments(sorted);
-        const names = await resolvePatientNames(
-          sorted.map((a) => a.patientId),
-          session.idToken
-        );
-        setPatientNames(names);
-      })
+    let cancelled = false;
+
+    async function load() {
+      if (!session) return;
+      const { appointments } = await api.listDoctorAppointments(session.sub, session.idToken);
+      const sorted = appointments.slice().sort((a, b) => a.startTime.localeCompare(b.startTime));
+      if (cancelled) return;
+      setAppointments(sorted);
+      const names = await resolvePatientNames(
+        sorted.map((a) => a.patientId),
+        session.idToken
+      );
+      if (!cancelled) setPatientNames(names);
+    }
+
+    load()
       .catch((err) => setError(err instanceof Error ? err.message : "Failed to load appointments"))
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    const intervalId = setInterval(() => {
+      if (document.hidden) return;
+      load().catch(() => {});
+    }, 8000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(intervalId);
+    };
   }, [session]);
 
   async function cancel(id: string) {
@@ -109,6 +126,95 @@ export default function DoctorAppointmentsPage() {
 
   if (loading) return <LoadingState />;
 
+  function statusBadgeVariant(status: string) {
+    return status === "confirmed"
+      ? "success"
+      : status === "completed"
+        ? "info"
+        : status === "pending"
+          ? "warning"
+          : status === "rejected"
+            ? "danger"
+            : "neutral";
+  }
+
+  function renderActions(appt: Appointment) {
+    if (appt.status === "pending") {
+      return (
+        <div className="flex flex-wrap gap-2">
+          <Button size="sm" disabled={respondingId === appt.id} onClick={() => respond(appt.id, true)}>
+            {respondingId === appt.id ? "Accepting..." : "Accept"}
+          </Button>
+          <Button
+            variant="danger"
+            size="sm"
+            disabled={respondingId === appt.id}
+            onClick={() => respond(appt.id, false)}
+          >
+            {respondingId === appt.id ? "Declining..." : "Decline"}
+          </Button>
+        </div>
+      );
+    }
+    if (appt.status === "confirmed") {
+      return (
+        <div className="flex flex-wrap gap-2">
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={completingId === appt.id}
+            onClick={() => markCompleted(appt.id)}
+          >
+            {completingId === appt.id ? "Marking..." : "Mark completed"}
+          </Button>
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button variant="danger" size="sm" disabled={cancellingId === appt.id}>
+                {cancellingId === appt.id ? "Cancelling..." : "Cancel"}
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Cancel this appointment?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  This will cancel the appointment with {patientNames[appt.patientId] ?? appt.patientId} on{" "}
+                  {new Date(appt.startTime).toLocaleString()}. This can&apos;t be undone.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Keep it</AlertDialogCancel>
+                <AlertDialogAction onClick={() => cancel(appt.id)}>Cancel appointment</AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        </div>
+      );
+    }
+    if (appt.status === "completed") {
+      return (
+        <div className="flex flex-col items-start gap-2 md:items-end">
+          {!issuedIds[appt.id] ? (
+            <IssuePrescriptionModal
+              appointmentId={appt.id}
+              onIssued={() => setIssuedIds((prev) => ({ ...prev, [appt.id]: true }))}
+            />
+          ) : (
+            <Badge variant="success">Prescription issued</Badge>
+          )}
+          {!uploadedIds[appt.id] ? (
+            <PrescriptionUpload
+              appointmentId={appt.id}
+              onUploaded={() => setUploadedIds((prev) => ({ ...prev, [appt.id]: true }))}
+            />
+          ) : (
+            <FollowUpCallPanel appointmentId={appt.id} patientId={appt.patientId} />
+          )}
+        </div>
+      );
+    }
+    return null;
+  }
+
   return (
     <div className="flex flex-col gap-4">
       <PageHeader title="Appointments" />
@@ -116,132 +222,63 @@ export default function DoctorAppointmentsPage() {
       {appointments.length === 0 ? (
         <EmptyState message="No appointments yet." />
       ) : (
-        <Card padding="none">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead className="pl-5">Patient</TableHead>
-                <TableHead>Time</TableHead>
-                <TableHead>Type</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead className="pr-5 text-right">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {appointments.map((appt) => (
-                <TableRow key={appt.id}>
-                  <TableCell className="pl-5 font-medium">
-                    {patientNames[appt.patientId] ?? appt.patientId}
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">
-                    {new Date(appt.startTime).toLocaleString()}
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">{appt.consultationType}</TableCell>
-                  <TableCell>
-                    <Badge
-                      variant={
-                        appt.status === "confirmed"
-                          ? "success"
-                          : appt.status === "completed"
-                            ? "info"
-                            : appt.status === "pending"
-                              ? "warning"
-                              : appt.status === "rejected"
-                                ? "danger"
-                                : "neutral"
-                      }
-                    >
-                      {appt.status}
-                    </Badge>
-                    {uploadedIds[appt.id] && (
-                      <Badge variant="success" className="ml-1.5">
-                        Prescription uploaded
-                      </Badge>
-                    )}
-                  </TableCell>
-                  <TableCell className="pr-5 text-right">
-                    <div className="flex flex-col items-end gap-2">
-                      {appt.status === "pending" && (
-                        <div className="flex gap-2">
-                          <Button
-                            size="sm"
-                            disabled={respondingId === appt.id}
-                            onClick={() => respond(appt.id, true)}
-                          >
-                            {respondingId === appt.id ? "Accepting..." : "Accept"}
-                          </Button>
-                          <Button
-                            variant="danger"
-                            size="sm"
-                            disabled={respondingId === appt.id}
-                            onClick={() => respond(appt.id, false)}
-                          >
-                            {respondingId === appt.id ? "Declining..." : "Decline"}
-                          </Button>
-                        </div>
-                      )}
-                      {appt.status === "confirmed" && (
-                        <div className="flex gap-2">
-                          <Button
-                            variant="secondary"
-                            size="sm"
-                            disabled={completingId === appt.id}
-                            onClick={() => markCompleted(appt.id)}
-                          >
-                            {completingId === appt.id ? "Marking..." : "Mark completed"}
-                          </Button>
-                          <AlertDialog>
-                            <AlertDialogTrigger asChild>
-                              <Button variant="danger" size="sm" disabled={cancellingId === appt.id}>
-                                {cancellingId === appt.id ? "Cancelling..." : "Cancel"}
-                              </Button>
-                            </AlertDialogTrigger>
-                            <AlertDialogContent>
-                              <AlertDialogHeader>
-                                <AlertDialogTitle>Cancel this appointment?</AlertDialogTitle>
-                                <AlertDialogDescription>
-                                  This will cancel the appointment with{" "}
-                                  {patientNames[appt.patientId] ?? appt.patientId} on{" "}
-                                  {new Date(appt.startTime).toLocaleString()}. This can&apos;t be undone.
-                                </AlertDialogDescription>
-                              </AlertDialogHeader>
-                              <AlertDialogFooter>
-                                <AlertDialogCancel>Keep it</AlertDialogCancel>
-                                <AlertDialogAction onClick={() => cancel(appt.id)}>
-                                  Cancel appointment
-                                </AlertDialogAction>
-                              </AlertDialogFooter>
-                            </AlertDialogContent>
-                          </AlertDialog>
-                        </div>
-                      )}
-                      {appt.status === "completed" && (
-                        <>
-                          {!issuedIds[appt.id] ? (
-                            <IssuePrescriptionModal
-                              appointmentId={appt.id}
-                              onIssued={() => setIssuedIds((prev) => ({ ...prev, [appt.id]: true }))}
-                            />
-                          ) : (
-                            <Badge variant="success">Prescription issued</Badge>
-                          )}
-                          {!uploadedIds[appt.id] ? (
-                            <PrescriptionUpload
-                              appointmentId={appt.id}
-                              onUploaded={() => setUploadedIds((prev) => ({ ...prev, [appt.id]: true }))}
-                            />
-                          ) : (
-                            <FollowUpCallPanel appointmentId={appt.id} patientId={appt.patientId} />
-                          )}
-                        </>
-                      )}
-                    </div>
-                  </TableCell>
+        <>
+          <div className="flex flex-col gap-3 md:hidden">
+            {appointments.map((appt) => (
+              <Card key={appt.id} padding="sm" className="flex flex-col gap-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-medium">{patientNames[appt.patientId] ?? appt.patientId}</span>
+                  <div className="flex flex-wrap justify-end gap-1.5">
+                    <Badge variant={statusBadgeVariant(appt.status)}>{appt.status}</Badge>
+                    {uploadedIds[appt.id] && <Badge variant="success">Prescription uploaded</Badge>}
+                  </div>
+                </div>
+                <span className="text-xs text-muted-foreground">
+                  {new Date(appt.startTime).toLocaleString()} &middot; {appt.consultationType}
+                </span>
+                {renderActions(appt)}
+              </Card>
+            ))}
+          </div>
+
+          <Card padding="none" className="hidden md:block">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="pl-5">Patient</TableHead>
+                  <TableHead>Time</TableHead>
+                  <TableHead>Type</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead className="pr-5 text-right">Actions</TableHead>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </Card>
+              </TableHeader>
+              <TableBody>
+                {appointments.map((appt) => (
+                  <TableRow key={appt.id}>
+                    <TableCell className="pl-5 font-medium">
+                      {patientNames[appt.patientId] ?? appt.patientId}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {new Date(appt.startTime).toLocaleString()}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">{appt.consultationType}</TableCell>
+                    <TableCell>
+                      <Badge variant={statusBadgeVariant(appt.status)}>{appt.status}</Badge>
+                      {uploadedIds[appt.id] && (
+                        <Badge variant="success" className="ml-1.5">
+                          Prescription uploaded
+                        </Badge>
+                      )}
+                    </TableCell>
+                    <TableCell className="pr-5 text-right">
+                      <div className="flex flex-col items-end gap-2">{renderActions(appt)}</div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </Card>
+        </>
       )}
     </div>
   );

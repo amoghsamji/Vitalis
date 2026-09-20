@@ -35,8 +35,6 @@ interface PatientDashboardData {
 type DashboardData = DoctorDashboardData | PatientDashboardData;
 
 export default function DashboardPage() {
-  // Session is guarded by app/(app)/layout.tsx, which does not render this
-  // page until session/role are settled.
   const { session, role } = useAuth();
 
   const [respondingId, setRespondingId] = useState<string | null>(null);
@@ -93,7 +91,7 @@ export default function DashboardPage() {
       } satisfies PatientDashboardData;
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session?.sub, role]);
+  }, [session?.sub, role], { pollMs: 8000 });
 
   async function respond(id: string, accept: boolean) {
     if (!session) return;
@@ -174,7 +172,31 @@ export default function DashboardPage() {
                       NEEDS RESPONSE
                     </span>
                   </div>
-                  <Table>
+                  <div className="flex flex-col gap-2 p-3 sm:hidden">
+                    {data.pendingAppointments.map((appt) => (
+                      <div key={appt.id} className="flex flex-col gap-2 rounded-md border border-border p-2.5">
+                        <span className="font-medium">{data.patientNames[appt.patientId] ?? appt.patientId}</span>
+                        <span className="text-xs text-muted-foreground">
+                          {new Date(appt.startTime).toLocaleString()} &middot; {appt.consultationType}
+                        </span>
+                        <div className="flex flex-wrap gap-2">
+                          <Button size="sm" disabled={respondingId === appt.id} onClick={() => respond(appt.id, true)}>
+                            {respondingId === appt.id ? "Accepting..." : "Accept"}
+                          </Button>
+                          <Button
+                            variant="danger"
+                            size="sm"
+                            disabled={respondingId === appt.id}
+                            onClick={() => respond(appt.id, false)}
+                          >
+                            {respondingId === appt.id ? "Declining..." : "Decline"}
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <Table className="hidden sm:table">
                     <TableHeader>
                       <TableRow>
                         <TableHead className="pl-5">Patient</TableHead>
@@ -256,7 +278,6 @@ export default function DashboardPage() {
                 )}
               </Card>
 
-              {/* Activity Log */}
               <div className="rounded-[2px] border border-border bg-card p-4">
                 <div className="flex items-center justify-between border-b border-border pb-2">
                   <span className="font-mono text-[10px] uppercase tracking-widest text-primary font-medium">
@@ -424,7 +445,6 @@ export default function DashboardPage() {
                 )}
               </Card>
 
-              {/* Activity Log Section */}
               <div className="rounded-[2px] border border-border bg-card p-4">
                 <div className="flex items-center justify-between border-b border-border pb-2">
                   <span className="font-mono text-[10px] uppercase tracking-widest text-primary font-medium">

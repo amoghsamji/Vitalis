@@ -39,7 +39,7 @@ export default function PatientAppointmentsPage() {
     return api
       .listPatientAppointments(session.sub, session.idToken)
       .then(({ appointments }) => appointments.slice().sort((a, b) => a.startTime.localeCompare(b.startTime)));
-  }, [session]);
+  }, [session], { pollMs: 8000 });
 
   async function cancel(id: string) {
     if (!session) return;
@@ -64,22 +64,13 @@ export default function PatientAppointmentsPage() {
       {!appointments || appointments.length === 0 ? (
         <EmptyState message="No appointments yet." cta={{ label: "Find a doctor", href: "/patient/doctors" }} />
       ) : (
-        <Card padding="none">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead className="pl-5">Time</TableHead>
-                <TableHead>Type</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead className="pr-5 text-right">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {appointments.map((appt) => (
-                <TableRow key={appt.id}>
-                  <TableCell className="pl-5 font-medium">{new Date(appt.startTime).toLocaleString()}</TableCell>
-                  <TableCell className="text-muted-foreground">{appt.consultationType}</TableCell>
-                  <TableCell>
+        <>
+          <div className="flex flex-col gap-2 sm:hidden">
+            {appointments.map((appt) => (
+              <Card key={appt.id} padding="sm" className="flex flex-col gap-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-medium">{new Date(appt.startTime).toLocaleString()}</span>
+                  <div className="flex flex-wrap justify-end gap-1.5">
                     <Badge
                       variant={
                         appt.status === "confirmed"
@@ -94,44 +85,101 @@ export default function PatientAppointmentsPage() {
                       {appt.status}
                     </Badge>
                     {appt.status === "completed" && <FollowUpStatusBadge appointmentId={appt.id} />}
-                  </TableCell>
-                  <TableCell className="pr-5 text-right">
-                    {(appt.status === "confirmed" || appt.status === "pending") && (
-                      <AlertDialog>
-                        <AlertDialogTrigger asChild>
-                          <Button variant="danger" size="sm" disabled={cancellingId === appt.id}>
-                            {cancellingId === appt.id ? "Cancelling..." : "Cancel"}
-                          </Button>
-                        </AlertDialogTrigger>
-                        <AlertDialogContent>
-                          <AlertDialogHeader>
-                            <AlertDialogTitle>Cancel this appointment?</AlertDialogTitle>
-                            <AlertDialogDescription>
-                              This will cancel your appointment on {new Date(appt.startTime).toLocaleString()}.
-                              This can&apos;t be undone.
-                            </AlertDialogDescription>
-                          </AlertDialogHeader>
-                          <AlertDialogFooter>
-                            <AlertDialogCancel>Keep it</AlertDialogCancel>
-                            <AlertDialogAction onClick={() => cancel(appt.id)}>Cancel appointment</AlertDialogAction>
-                          </AlertDialogFooter>
-                        </AlertDialogContent>
-                      </AlertDialog>
-                    )}
-                  </TableCell>
+                  </div>
+                </div>
+                <span className="text-xs text-muted-foreground">{appt.consultationType}</span>
+                {(appt.status === "confirmed" || appt.status === "pending") && (
+                  <AlertDialog>
+                    <AlertDialogTrigger asChild>
+                      <Button variant="danger" size="sm" className="self-start" disabled={cancellingId === appt.id}>
+                        {cancellingId === appt.id ? "Cancelling..." : "Cancel"}
+                      </Button>
+                    </AlertDialogTrigger>
+                    <AlertDialogContent>
+                      <AlertDialogHeader>
+                        <AlertDialogTitle>Cancel this appointment?</AlertDialogTitle>
+                        <AlertDialogDescription>
+                          This will cancel your appointment on {new Date(appt.startTime).toLocaleString()}. This
+                          can&apos;t be undone.
+                        </AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel>Keep it</AlertDialogCancel>
+                        <AlertDialogAction onClick={() => cancel(appt.id)}>Cancel appointment</AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
+                )}
+              </Card>
+            ))}
+          </div>
+
+          <Card padding="none" className="hidden sm:block">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="pl-5">Time</TableHead>
+                  <TableHead>Type</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead className="pr-5 text-right">Actions</TableHead>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </Card>
+              </TableHeader>
+              <TableBody>
+                {appointments.map((appt) => (
+                  <TableRow key={appt.id}>
+                    <TableCell className="pl-5 font-medium">{new Date(appt.startTime).toLocaleString()}</TableCell>
+                    <TableCell className="text-muted-foreground">{appt.consultationType}</TableCell>
+                    <TableCell>
+                      <Badge
+                        variant={
+                          appt.status === "confirmed"
+                            ? "success"
+                            : appt.status === "pending"
+                              ? "warning"
+                              : appt.status === "rejected"
+                                ? "danger"
+                                : "neutral"
+                        }
+                      >
+                        {appt.status}
+                      </Badge>
+                      {appt.status === "completed" && <FollowUpStatusBadge appointmentId={appt.id} />}
+                    </TableCell>
+                    <TableCell className="pr-5 text-right">
+                      {(appt.status === "confirmed" || appt.status === "pending") && (
+                        <AlertDialog>
+                          <AlertDialogTrigger asChild>
+                            <Button variant="danger" size="sm" disabled={cancellingId === appt.id}>
+                              {cancellingId === appt.id ? "Cancelling..." : "Cancel"}
+                            </Button>
+                          </AlertDialogTrigger>
+                          <AlertDialogContent>
+                            <AlertDialogHeader>
+                              <AlertDialogTitle>Cancel this appointment?</AlertDialogTitle>
+                              <AlertDialogDescription>
+                                This will cancel your appointment on {new Date(appt.startTime).toLocaleString()}.
+                                This can&apos;t be undone.
+                              </AlertDialogDescription>
+                            </AlertDialogHeader>
+                            <AlertDialogFooter>
+                              <AlertDialogCancel>Keep it</AlertDialogCancel>
+                              <AlertDialogAction onClick={() => cancel(appt.id)}>Cancel appointment</AlertDialogAction>
+                            </AlertDialogFooter>
+                          </AlertDialogContent>
+                        </AlertDialog>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </Card>
+        </>
       )}
     </div>
   );
 }
 
-// Status-only: never renders event details or transcripts, which the backend
-// deliberately withholds from the patient-facing GET /follow-up-calls response
-// (see lambda/follow-up-calls/index.ts).
 function FollowUpStatusBadge({ appointmentId }: { appointmentId: string }) {
   const { session } = useAuth();
   const [call, setCall] = useState<FollowUpCall | null>(null);

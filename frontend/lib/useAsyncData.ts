@@ -1,12 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { ApiError } from "./api";
 
-/**
- * Shared loading/error/data trio for pages with a single straightforward
- * fetch. `fetcher` returning `null` means "not ready yet" (e.g. session
- * still loading) — skips the fetch and stays in the loading state.
- */
-export function useAsyncData<T>(fetcher: () => Promise<T> | null, deps: unknown[]) {
+export function useAsyncData<T>(fetcher: () => Promise<T> | null, deps: unknown[], options?: { pollMs?: number }) {
   const [data, setData] = useState<T | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -38,6 +33,25 @@ export function useAsyncData<T>(fetcher: () => Promise<T> | null, deps: unknown[
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [...deps, reloadTick]);
+
+  const pollMs = options?.pollMs;
+  useEffect(() => {
+    if (!pollMs) return;
+    let cancelled = false;
+    const id = setInterval(() => {
+      if (typeof document !== "undefined" && document.hidden) return;
+      const promise = fetcher();
+      if (!promise) return;
+      promise.then((result) => {
+        if (!cancelled) setData(result);
+      }, () => {});
+    }, pollMs);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [...deps, pollMs]);
 
   return { data, setData, loading, error, reload };
 }
